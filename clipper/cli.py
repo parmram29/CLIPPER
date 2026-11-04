@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -27,6 +28,11 @@ DEFAULT_TOP = 3
 # Without {transcript} the model never sees the video; without {num_clips} the
 # count it is asked for is undefined. Both are filled in by str.replace upstream.
 REQUIRED_PROMPT_PLACEHOLDERS = ("{transcript}", "{num_clips}")
+FACE_INSTALL_HINT = (
+    "Face tracking needs MediaPipe, which is not installed. Install it with "
+    "`pip install 'clipper[face]'` (it has no build for every Python/CPU, e.g. Intel "
+    "Macs on Python 3.13+), or use `--reframe centered`."
+)
 
 
 def _log(message: str) -> None:
@@ -82,6 +88,27 @@ def top_indices(highlights: list[Mapping[str, Any]], n: int) -> list[int]:
         raise ValueError("--top must be at least 1")
     order = sorted(range(len(highlights)), key=lambda i: (-_score(highlights[i]), i))
     return order[:n]
+
+
+def mediapipe_available() -> bool:
+    """True if MediaPipe is installed (checked without importing it)."""
+    try:
+        return importlib.util.find_spec("mediapipe") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def resolve_reframe(mode: str, available: bool | None = None) -> str:
+    """Turn ``auto`` into ``face`` or ``centered``; reject ``face`` without MediaPipe.
+
+    Failing here, before any download, beats failing after minutes of work.
+    """
+    available = mediapipe_available() if available is None else available
+    if mode == "auto":
+        return "face" if available else "centered"
+    if mode == "face" and not available:
+        raise RuntimeError(FACE_INSTALL_HINT)
+    return mode
 
 
 def load_session(session_dir: str | Path) -> dict[str, Any]:
@@ -221,6 +248,10 @@ def _process(
 ) -> dict[str, Any]:
     session = load_session(session_dir)
     chosen = select_highlights(session, pick=pick, top=top)
+    requested_reframe = reframe
+    reframe = resolve_reframe(requested_reframe)
+    if requested_reframe == "auto" and reframe == "centered":
+        _log("MediaPipe not installed: using --reframe centered (no face tracking)")
     resolve_cookies(cookies)
 
     from .clip_processor import process_selected_highlights
@@ -346,7 +377,6 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         ("numpy", "arrays"),
         ("PIL", "hook text"),
         ("openai", "LLM client"),
-        ("mediapipe", "face tracking"),
     ):
         try:
             mod = importlib.import_module(module)
@@ -363,7 +393,13 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         warn("deno not found; upstream logs that some YouTube formats may be unavailable without it")
 
     model_path = _face_model_path()
-    if model_path is None:
+    if not mediapipe_available():
+        warn(
+            "mediapipe not installed: face tracking is off and `--reframe auto` uses centered. "
+            "To enable it: pip install 'clipper[face]' (Apple Silicon, or Python 3.9-3.12 on "
+            "Intel Macs)"
+        )
+    elif model_path is None:
         warn(
             "MediaPipe face model not cached; `--reframe face` downloads it on first use "
             "from storage.googleapis.com (`--reframe centered` needs no model)"
@@ -454,7 +490,12 @@ def build_parser() -> argparse.ArgumentParser:
         add_cookies(sp)
 
     def add_process_args(sp: argparse.ArgumentParser) -> None:
-        sp.add_argument("--reframe", choices=["face", "centered", "original"], default="face")
+        sp.add_argument(
+            "--reframe",
+            choices=["auto", "face", "centered", "original"],
+            default="auto",
+            help="auto = face tracking if MediaPipe is installed, else centered (default)",
+        )
         sp.add_argument(
             "--background",
             choices=["black", "blurred"],
