@@ -1,0 +1,3 @@
+yt-dlp
+pysrt>=1.1.2
+python-dotenv
