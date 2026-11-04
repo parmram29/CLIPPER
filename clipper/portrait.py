@@ -47,6 +47,23 @@ MIN_SPEAK_RATIO = 0.18    # (mouth opening / face height) above this counts as "
 LIP_INDICES = {13, 14, 78, 81, 82, 84, 87, 88, 95, 146, 178, 181, 185, 191, 308, 312, 317, 318, 324, 375, 402, 405, 409, 415}
 
 
+def _progress_seconds(line: str) -> float | None:
+    """Seconds encoded so far, from one line of ffmpeg's ``-progress`` output.
+
+    Returns None for any line that is not a usable ``out_time_us`` reading: other keys,
+    ``N/A`` (reported before the first frame and, on some builds, at other points), empty
+    values, and ffmpeg's negative "unset" sentinel.
+    """
+    key, _, value = line.strip().partition("=")
+    if key != "out_time_us":
+        return None
+    try:
+        microseconds = int(value)
+    except ValueError:
+        return None
+    return microseconds / 1_000_000 if microseconds >= 0 else None
+
+
 def convert_to_portrait(
     input_path: str,
     output_path: str,
@@ -422,9 +439,11 @@ def convert_to_portrait_centered(
         assert proc.stderr is not None
         for line in proc.stderr:
             stderr_chunks.append(line)
-            line = line.strip()
-            if line.startswith("out_time_us=") and duration > 0:
-                cur = int(line.split("=", 1)[1]) / 1_000_000
+            # CLIPPER change: upstream did int() on the value directly, which crashed the
+            # whole run when ffmpeg reported `out_time_us=N/A` (seen on a Mac with an
+            # evermeet.cx snapshot build). Unusable progress lines are now just skipped.
+            cur = _progress_seconds(line) if duration > 0 else None
+            if cur is not None:
                 pct = min(99, int(cur / duration * 100))
                 if pct > last_pct and pct % 10 == 0:
                     last_pct = pct
