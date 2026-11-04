@@ -70,6 +70,32 @@ def test_doctor_confirms_face_tracking_when_the_runtime_loads(monkeypatch, tmp_p
     assert "[ok  ] face tracking runtime works" in capsys.readouterr().out
 
 
+def test_doctor_tells_you_how_to_install_a_missing_ffmpeg(monkeypatch, tmp_path, capsys):
+    import clipper.helpers
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(clipper.helpers, "get_ffmpeg_path", lambda: "/definitely/not/ffmpeg")
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    code = cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "[FAIL] ffmpeg not runnable" in out
+    assert "brew install ffmpeg" in out
+
+
+@pytest.mark.parametrize(
+    "platform,expected",
+    [("darwin", "brew install ffmpeg"), ("linux", "apt install ffmpeg"), ("win32", "ffmpeg.org")],
+)
+def test_ffmpeg_install_hint_per_platform(platform, expected):
+    assert expected in cli._ffmpeg_install_hint(platform)
+
+
+def test_libass_hint_mentions_the_mac_workaround_only_on_macos():
+    assert "ffmpeg-full" in cli._libass_hint("darwin")
+    assert "ffmpeg-full" not in cli._libass_hint("linux")
+
+
 @needs_ffmpeg
 def test_doctor_without_config_only_warns(monkeypatch, tmp_path, capsys):
     monkeypatch.chdir(tmp_path)
