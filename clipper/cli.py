@@ -16,6 +16,7 @@ import importlib
 import importlib.util
 import json
 import os
+import ssl
 import subprocess
 import sys
 from pathlib import Path
@@ -88,6 +89,33 @@ def top_indices(highlights: list[Mapping[str, Any]], n: int) -> list[int]:
         raise ValueError("--top must be at least 1")
     order = sorted(range(len(highlights)), key=lambda i: (-_score(highlights[i]), i))
     return order[:n]
+
+
+_CA_FALLBACK: str | None = None
+
+
+def ensure_ca_certificates() -> str | None:
+    """Point Python's TLS at certifi's CA bundle when it has no usable one of its own.
+
+    Python installed from python.org on macOS ships without root certificates, so every
+    HTTPS request (yt-dlp's included) fails with "CERTIFICATE_VERIFY_FAILED: unable to
+    get local issuer certificate". The usual fix is a one-off `Install Certificates.command`.
+    This does the equivalent automatically, but never overrides an explicit SSL_CERT_FILE /
+    SSL_CERT_DIR, and does nothing when the interpreter already has a bundle.
+
+    Returns the bundle path if it was applied, else None.
+    """
+    if os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
+        return None
+    paths = ssl.get_default_verify_paths()  # cafile/capath are None when the path is missing
+    if paths.cafile or paths.capath:
+        return None
+    try:
+        import certifi
+    except ImportError:
+        return None
+    os.environ["SSL_CERT_FILE"] = certifi.where()
+    return certifi.where()
 
 
 def mediapipe_available() -> bool:
@@ -406,6 +434,16 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         except Exception as exc:  # noqa: BLE001 - report any import-time failure
             fail(f"{module} failed to import ({purpose}): {exc}")
 
+    if _CA_FALLBACK:
+        ok(f"TLS: this Python has no CA bundle, so CLIPPER is using certifi's ({_CA_FALLBACK})")
+    else:
+        paths = ssl.get_default_verify_paths()
+        if paths.cafile or paths.capath or os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
+            ok("TLS: CA certificates available")
+        else:
+            warn("TLS: no CA certificates found and certifi is missing; HTTPS downloads will fail. "
+                 "Run: pip install certifi")
+
     if get_deno_path():
         ok("deno found")
     else:
@@ -555,8 +593,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    global _CA_FALLBACK
     args = build_parser().parse_args(argv)
     config.load_dotenv_if_present()
+    _CA_FALLBACK = ensure_ca_certificates()
     try:
         return args.func(args)
     except KeyboardInterrupt:
