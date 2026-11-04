@@ -15,9 +15,10 @@ from typing import Callable
 import cv2
 import numpy as np
 
-# Explicit import of MediaPipe Tasks API (not lazy-loaded, works with PyInstaller)
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
+# CLIPPER change: MediaPipe is imported lazily inside convert_to_portrait(). Upstream
+# imported it here at module level, which made every install depend on it even for
+# `--reframe centered`. MediaPipe's current releases ship macOS wheels for Apple
+# Silicon only, so an Intel Mac on Python 3.13+ cannot install it at all.
 
 from .helpers import get_face_landmarker_model_path, get_ffmpeg_path
 
@@ -52,6 +53,17 @@ def convert_to_portrait(
     log: LogFn | None = None,
 ) -> str:
     log = log or (lambda m: None)
+
+    try:
+        from mediapipe.tasks import python
+        from mediapipe.tasks.python import vision
+    except ImportError as exc:
+        raise RuntimeError(
+            "Face tracking needs MediaPipe, which is not installed (it has no build for "
+            "every Python/CPU, e.g. Intel Macs on Python 3.13+). Install it with "
+            "`pip install 'clipper[face]'`, or use `--reframe centered`."
+        ) from exc
+
     log("Converting to portrait (9:16) with MediaPipe Face Landmarker...")
 
     cap = cv2.VideoCapture(input_path)

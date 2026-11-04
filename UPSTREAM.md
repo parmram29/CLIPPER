@@ -33,6 +33,10 @@ this repo, as the license requires.
 
 - `clipper/video_processor.py`: `_get_cookies_path()` first honours `$CLIPPER_COOKIES`,
   so the section download uses the cookies file the CLI validated.
+- `clipper/portrait.py`: MediaPipe is imported lazily inside `convert_to_portrait()`
+  (with an install hint on failure) instead of at module level. Upstream's module-level
+  import made MediaPipe a hard requirement for the whole package, but its current
+  releases have no macOS Intel wheels, so such installs failed outright.
 - `clipper/constants.py`: one docstring now names the new package.
 - The package was renamed from `yt_short_clipper_core` to `clipper`. All upstream
   imports inside the core are relative, so no other code changed.

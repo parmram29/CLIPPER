@@ -13,16 +13,19 @@ license-files = ["LICENSE"]
 dependencies = [
     "openai>=1.0.0",
     "yt-dlp>=2026.8.19",
-    # cv2 comes from mediapipe's own opencv-contrib-python dependency. Declaring
-    # opencv-python / opencv-python-headless as well would install two packages
-    # that both provide `cv2` and overwrite each other's files.
+    # The same OpenCV distribution mediapipe requires, so installing the `face` extra
+    # never puts two packages that both provide `cv2` side by side (they overwrite
+    # each other's files).
+    "opencv-contrib-python>=4.8.0",
     "numpy>=1.24.0",
     "Pillow>=10.0.0",
-    "mediapipe>=0.10.0",
     "python-dotenv>=1.0.0",
 ]
 
 [project.optional-dependencies]
+# Face-tracked reframing. Optional because MediaPipe's current releases only ship
+# macOS wheels for Apple Silicon; Intel Macs need Python 3.9-3.12 (mediapipe 0.10.21).
+face = ["mediapipe>=0.10.0"]
 dev = ["pytest>=8"]
 
 [project.scripts]

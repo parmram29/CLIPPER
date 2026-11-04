@@ -15,6 +15,8 @@ import pytest
 
 from clipper.helpers import get_face_landmarker_model_path, get_ffmpeg_path
 
+pytest.importorskip("mediapipe", reason="optional extra: pip install 'clipper[face]'")
+
 SRC_W, SRC_H = 1280, 720
 CROP_W = round(SRC_H * 9 / 16)  # width of a 9:16 window at source height = 405
 

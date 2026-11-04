@@ -9,14 +9,17 @@ CLIPPER is a headless CLI built on the pipeline from
 
 ## Setup
 
-Needs Python 3.10+ and `ffmpeg` with libass on your PATH. On Debian/Ubuntu, face tracking also
-needs MediaPipe's graphics libraries: `sudo apt install libegl1 libgles2` (`clipper doctor`
-tells you if they are missing; `--reframe centered` works without them).
+Needs Python 3.10+ and `ffmpeg` with libass on your PATH (macOS: `brew install ffmpeg`).
 
 ```bash
 bash setup.sh
 source .venv/bin/activate
 ```
+
+**Face tracking is optional.** It needs MediaPipe, which `setup.sh` tries to install and skips
+if there is no build for your machine. Without it, `--reframe auto` (the default) uses a centered
+crop and everything else works. On Debian/Ubuntu, face tracking also needs
+`sudo apt install libegl1 libgles2`. `clipper doctor` reports both cases.
 
 Then edit `.env`:
 
@@ -48,7 +51,7 @@ Useful options:
 
 - `--direction "skip the intro; use 12:30 - 13:40"` steers the highlight model. An explicit clock range is used exactly.
 - `--prompt-file niche.txt` replaces the highlight prompt (must contain `{transcript}` and `{num_clips}`). Start from `clipper/prompts.py`.
-- `--reframe face|centered|original` and `--background black|blurred`. Face tracking is the slow path; centered is a single ffmpeg pass.
+- `--reframe auto|face|centered|original` and `--background black|blurred`. `auto` (default) tracks faces if MediaPipe is installed and centers otherwise; an explicit `face` without MediaPipe fails before downloading anything. Face tracking is the slow path; centered is a single ffmpeg pass.
 - `--pick 1,3-4` or `--top N` chooses which clips to render. Rendered clips are skipped on re-run.
 
 Clips land in `<session>/clips/clip_NNN/master.mp4` with a `data.json` (title, description, hook, timings).
@@ -63,8 +66,26 @@ Clips land in `<session>/clips/clip_NNN/master.mp4` with a `data.json` (title, d
 - **Cookies are your logged-in session.** Treat the file like a password.
 - Only clip footage you have the rights to use. YouTube's terms and copyright law apply.
 
+## Troubleshooting
+
+**`Could not find a version that satisfies the requirement mediapipe` (`from versions: none`)**
+MediaPipe's current releases (1.x) publish macOS wheels for **Apple Silicon only**; the last
+release with Intel-Mac wheels is 0.10.21, for Python 3.9-3.12
+([PyPI files](https://pypi.org/project/mediapipe/#files)). So an Intel Mac, or a Python running under
+Rosetta, on Python 3.13+ has nothing to install. Check yours:
+
+```bash
+python3 -c "import sys, platform; print(sys.version.split()[0], platform.machine())"
+```
+
+`x86_64` means Intel (or Rosetta); `arm64` means Apple Silicon. Current `setup.sh` no longer fails on this
+and runs without face tracking. To get face tracking on Intel, use Python 3.9-3.12 in a fresh venv
+(e.g. `brew install python@3.12`) and `pip install 'clipper[face]'`.
+
 ## Tests
 
 ```bash
 pytest
 ```
+
+The face-tracking tests are skipped when MediaPipe isn't installed.

@@ -45,6 +45,7 @@ def test_doctor_flags_missing_native_libs_for_face_tracking(monkeypatch, tmp_pat
     # mediapipe imports fine without libEGL; only creating the landmarker fails.
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("CLIPPER_API_KEY", raising=False)
+    monkeypatch.setattr(cli, "mediapipe_available", lambda: True)
     monkeypatch.setattr(cli, "_face_model_path", lambda: tmp_path / "face_landmarker.task")
 
     def boom(_path):
@@ -62,6 +63,7 @@ def test_doctor_flags_missing_native_libs_for_face_tracking(monkeypatch, tmp_pat
 def test_doctor_confirms_face_tracking_when_the_runtime_loads(monkeypatch, tmp_path, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("CLIPPER_API_KEY", raising=False)
+    monkeypatch.setattr(cli, "mediapipe_available", lambda: True)
     monkeypatch.setattr(cli, "_face_model_path", lambda: tmp_path / "face_landmarker.task")
     monkeypatch.setattr(cli, "_probe_face_landmarker", lambda _path: None)
     cli.main(["doctor"])
