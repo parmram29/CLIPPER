@@ -314,6 +314,25 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _ffmpeg_install_hint(platform: str | None = None) -> str:
+    platform = sys.platform if platform is None else platform
+    if platform == "darwin":
+        return "Install it with: brew install ffmpeg"
+    if platform.startswith("linux"):
+        return "Install it with: sudo apt install ffmpeg (or your distro's package)"
+    return "Install it from https://ffmpeg.org/download.html and put it on your PATH."
+
+
+def _libass_hint(platform: str | None = None) -> str:
+    platform = sys.platform if platform is None else platform
+    if platform == "darwin":
+        return (
+            "Some Homebrew builds lack libass: try `brew install ffmpeg-full` and put its bin "
+            "directory first on your PATH."
+        )
+    return "Install an ffmpeg build with libass enabled (most distro packages have it)."
+
+
 def _face_model_path() -> Path | None:
     """The MediaPipe face model if it is already on disk (bundled or cached), else None."""
     from .helpers import _find_bundled, _get_app_dir
@@ -367,9 +386,9 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         if " ass " in filters or " subtitles " in filters:
             ok("ffmpeg has libass (captions can be burned in)")
         else:
-            fail("ffmpeg has no libass; captions cannot be burned in")
+            fail(f"ffmpeg has no libass, so captions cannot be burned in. {_libass_hint()}")
     except (OSError, subprocess.SubprocessError) as exc:
-        fail(f"ffmpeg not runnable ({ffmpeg}): {exc}")
+        fail(f"ffmpeg not runnable ({ffmpeg}): {exc}. {_ffmpeg_install_hint()}")
 
     for module, purpose in (
         ("yt_dlp", "downloads"),
