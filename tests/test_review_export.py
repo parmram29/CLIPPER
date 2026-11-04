@@ -182,3 +182,56 @@ def test_reveal_reports_failure_instead_of_crashing(monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr(subprocess, "run", boom)
     assert export.reveal("/x") is False
+
+
+# --- caption angles, pinned comment, keywords and trend tags -------------------------------------------
+
+
+def _rich_social(session_dir):
+    social.save_social(
+        session_dir,
+        2,
+        {
+            "title": "Fight night",
+            "caption": "He walked in and everyone went quiet",
+            "variants": [
+                {"style": "tease", "caption": "He walked in and everyone went quiet"},
+                {"style": "question", "caption": "Would you have stayed?"},
+                {"style": "hot take", "caption": "He was right and you know it"},
+            ],
+            "hashtags": ["drama", "dramaalert"],
+            "keywords": ["reality tv fight", "awkward dinner"],
+            "pinned_comment": "Team who?",
+            "trend_tags_used": ["dramaalert"],
+        },
+    )
+
+
+def test_the_review_sheet_carries_the_alternate_captions_and_the_rest(session_dir):
+    _rich_social(session_dir)
+    third = review.build_rows(session_dir)[2]
+    assert third["caption"] == "He walked in and everyone went quiet"
+    assert third["caption_alt"] == "Would you have stayed? || He was right and you know it"
+    assert third["pinned_comment"] == "Team who?"
+    assert third["keywords"] == "reality tv fight, awkward dinner"
+    assert third["trend_tags"] == "#dramaalert"
+    # a pick with no post copy yet leaves them blank rather than failing
+    second = review.build_rows(session_dir)[1]
+    assert (second["caption_alt"], second["pinned_comment"], second["keywords"], second["trend_tags"]) == ("", "", "", "")
+
+
+def test_old_post_copy_without_the_new_fields_still_works(session_dir):
+    # the first clip's copy was saved in the earlier shape (no variants, keywords or pinned comment)
+    first = review.build_rows(session_dir)[0]
+    assert first["caption"] == "He could not look away" and first["caption_alt"] == "" and first["pinned_comment"] == ""
+
+
+def test_export_lists_every_caption_angle_with_the_hashtags_ready_to_paste(session_dir, tmp_path):
+    _rich_social(session_dir)
+    captions = export.export_clips(session_dir, tmp_path / "d").captions.read_text(encoding="utf-8")
+    block = captions.split("03 - fight-night.mp4")[1]
+    assert "Caption: He walked in and everyone went quiet #drama #dramaalert" in block
+    assert "Alt (question): Would you have stayed? #drama #dramaalert" in block
+    assert "Alt (hot take): He was right and you know it #drama #dramaalert" in block
+    assert "Pinned comment: Team who?" in block
+    assert "Search keywords: reality tv fight, awkward dinner" in block

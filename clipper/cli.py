@@ -4,7 +4,8 @@
     clipper find URL [--clips N] [--profile viral|podcast] [--direction TEXT] ...
     clipper process SESSION_DIR [--pick 1,3-4 | --top N] [--reframe ...] [--export] ...
     clipper run URL [--clips N] [--top N] ...
-    clipper social SESSION_DIR      write a title, caption and hashtags for each clip
+    clipper social SESSION_DIR      write a title, 3 caption angles and hashtags for each clip
+    clipper trends [--init]         the file of current trends the captions draw on
     clipper review SESSION_DIR      write a review sheet (CSV) to rate the picks
     clipper export SESSION_DIR      gather finished clips into one folder (for AirDrop)
     clipper eval review.csv         compare the model's scores with your ratings
@@ -299,9 +300,14 @@ def _process(
     export: bool = False,
     export_to: str | None = None,
     open_after: bool = False,
+    niche: str | None = None,
+    trends_file: str | None = None,
 ) -> dict[str, Any]:
     session = load_session(session_dir)
     chosen = select_highlights(session, pick=pick, top=top)
+    # Read these before rendering, so a mistyped --trends path fails now, not after the render.
+    niche_text = resolve_niche(niche)
+    trends = load_trends_for_run(trends_file) if social else None
     requested_reframe = reframe
     reframe = resolve_reframe(requested_reframe)
     if requested_reframe == "auto" and reframe == "centered":
@@ -327,10 +333,31 @@ def _process(
         print(f"  {r['output_path']}{note}")
 
     if social:
-        _generate_social(session_dir, session, chosen)
+        _generate_social(session_dir, session, chosen, niche=niche_text, trends=trends)
     if export or export_to or open_after:
         _export(session_dir, export_to, open_after)
     return result
+
+
+def resolve_niche(cli_value: str | None, env: Mapping[str, str] | None = None) -> str | None:
+    env = os.environ if env is None else env
+    return (cli_value or env.get("CLIPPER_NICHE") or "").strip() or None
+
+
+def load_trends_for_run(cli_value: str | None, env: Mapping[str, str] | None = None):
+    """Load the trends file (explicit path, $CLIPPER_TRENDS, or ./trends.txt) and say what was found.
+
+    A path you asked for that does not exist is an error; a missing default file is just a note.
+    """
+    from . import trends as trends_mod
+
+    env = os.environ if env is None else env
+    explicit = cli_value or env.get("CLIPPER_TRENDS")
+    if explicit and not Path(explicit).is_file():
+        raise FileNotFoundError(f"trends file not found: {explicit}")
+    loaded = trends_mod.load_trends(explicit)
+    _log(trends_mod.describe(loaded, explicit))
+    return loaded
 
 
 def _generate_social(
@@ -340,6 +367,8 @@ def _generate_social(
     *,
     ai: Mapping[str, Any] | None = None,
     force: bool = False,
+    niche: str | None = None,
+    trends: Any = None,
 ) -> int:
     """Write a title, caption and hashtags for each chosen clip. Returns how many were written.
 
@@ -361,13 +390,19 @@ def _generate_social(
         if not force and social_mod.load_social(session_dir, index):
             continue
         try:
-            copy = social_mod.generate_social_copy(h, ai, language=language)
+            copy = social_mod.generate_social_copy(h, ai, language=language, niche=niche, trends=trends)
         except Exception as exc:  # noqa: BLE001
             _log(f"Could not write a caption for clip {index + 1}: {str(exc)[:200]}")
             continue
         social_mod.save_social(session_dir, index, copy)
         written += 1
         _log(f"Clip {index + 1}: {copy['title']}\n   {social_mod.caption_line(copy)}")
+        for variant in copy.get("variants", [])[1:]:
+            _log(f"   alt ({variant['style']}): {variant['caption']}")
+        if copy.get("pinned_comment"):
+            _log(f"   pinned comment: {copy['pinned_comment']}")
+        if copy.get("trend_tags_used"):
+            _log(f"   uses trending tag(s): {', '.join('#' + t for t in copy['trend_tags_used'])}")
     return written
 
 
@@ -404,6 +439,8 @@ def _process_options(args: argparse.Namespace) -> dict[str, Any]:
         export=args.export,
         export_to=args.export_to,
         open_after=args.open,
+        niche=args.niche,
+        trends_file=args.trends,
     )
 
 
@@ -422,9 +459,36 @@ def _cmd_social(args: argparse.Namespace) -> int:
     session = load_session(args.session_dir)
     chosen = select_highlights(session, pick=args.pick, top=args.top)
     ai = config.load_ai_config().as_dict()
-    written = _generate_social(args.session_dir, session, chosen, ai=ai, force=args.force)
+    written = _generate_social(
+        args.session_dir,
+        session,
+        chosen,
+        ai=ai,
+        force=args.force,
+        niche=resolve_niche(args.niche),
+        trends=load_trends_for_run(args.trends),
+    )
     if written == 0:
         print("Nothing new to write (use --force to regenerate existing captions).")
+    return 0
+
+
+def _cmd_trends(args: argparse.Namespace) -> int:
+    from . import trends as trends_mod
+
+    path = args.file or os.environ.get("CLIPPER_TRENDS") or trends_mod.DEFAULT_TRENDS_FILE
+    if args.init:
+        created = trends_mod.init_template(path)
+        print(f"Created {created}.")
+        print("Open it, replace the examples with what is trending right now, and save.")
+        print("Where to look: TikTok Creative Center > Trends")
+        print("  https://ads.tiktok.com/help/article/how-to-use-trends")
+        return 0
+    loaded = trends_mod.load_trends(path)
+    print(trends_mod.describe(loaded, path))
+    if loaded:
+        tags = ", ".join(f"#{t}" for t in loaded.hashtags) or "(none)"
+        print(f"Hashtags it will offer the model: {tags}")
     return 0
 
 
@@ -639,6 +703,19 @@ def build_parser() -> argparse.ArgumentParser:
             help="YouTube cookies.txt (default: $CLIPPER_COOKIES, then ./cookies.txt)",
         )
 
+    def add_social_args(sp: argparse.ArgumentParser) -> None:
+        sp.add_argument(
+            "--niche",
+            help="what your account is about, e.g. 'reality TV drama' (default: $CLIPPER_NICHE); "
+            "keeps hashtags and wording consistent",
+        )
+        sp.add_argument(
+            "--trends",
+            metavar="FILE",
+            help="file of what is trending right now (default: $CLIPPER_TRENDS, then ./trends.txt). "
+            "Create one with `clipper trends --init`",
+        )
+
     def add_find_args(sp: argparse.ArgumentParser) -> None:
         sp.add_argument("url")
         sp.add_argument("--clips", type=int, default=5, help="how many highlights to request (default 5)")
@@ -699,6 +776,7 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument(
             "--no-social", action="store_true", help="skip the title, caption and hashtags for each clip"
         )
+        add_social_args(sp)
         sp.add_argument(
             "--export",
             action="store_true",
@@ -740,7 +818,15 @@ def build_parser() -> argparse.ArgumentParser:
     social_group.add_argument("--pick", help="1-based clip numbers, e.g. 1,3-4 (default: all)")
     social_group.add_argument("--top", type=int, help="only the N highest-scoring clips")
     social.add_argument("--force", action="store_true", help="regenerate captions that already exist")
+    add_social_args(social)
     social.set_defaults(func=_cmd_social)
+
+    trends = sub.add_parser(
+        "trends", help="show or create the file of current trends that captions draw on"
+    )
+    trends.add_argument("--init", action="store_true", help="create a template trends file")
+    trends.add_argument("--file", metavar="FILE", help="which file (default: $CLIPPER_TRENDS, then ./trends.txt)")
+    trends.set_defaults(func=_cmd_trends)
 
     review = sub.add_parser("review", help="write a review sheet (CSV) to rate the picks")
     review.add_argument("session_dir")
@@ -774,7 +860,7 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("\ninterrupted", file=sys.stderr)
         return 130
-    except (config.ConfigError, ValueError, FileNotFoundError, RuntimeError) as exc:
+    except (config.ConfigError, ValueError, FileNotFoundError, FileExistsError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

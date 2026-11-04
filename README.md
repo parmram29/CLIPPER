@@ -77,12 +77,45 @@ candidates, duplicates of the same moment are dropped, and one final call re-sco
 survivor on a single scale, so a 7 from a dull stretch and a 7 from a lively one mean the
 same thing. Pass `--no-rerank` to skip that last call. Shorter videos behave as before.
 
-### Titles, captions and hashtags
+### Captions, hashtags and trends
 
-`process` and `run` write a cover title, a short hook-first caption, and 3-6 hashtags for each clip to
-`<session>/social/clip_NNN.json` (skipped if no API key is set; `--no-social` turns it off). Run
-`clipper social <session>` to (re)generate them, `--force` to overwrite. The length limits (60 / 150
-characters) are CLIPPER's own choices, not platform rules.
+`process` and `run` write post copy for each clip to `<session>/social/clip_NNN.json` (skipped if no API key
+is set; `--no-social` turns it off). `clipper social <session>` writes or rewrites it, `--force` overwrites.
+Each clip gets:
+
+- a **cover title** (60 characters);
+- **three caption angles** to test against each other: *tease* (promise the payoff, don't give it away),
+  *question* (something people will answer in the comments), and *hot take*. Each is at most 150 characters with
+  the hook in the first 100, one natural search keyword early, and no spoilers. The tone follows the clip's
+  category (a funny clip leaves the punchline out; a drama clip leads with the conflict);
+- **3-5 hashtags**: a broad one or two, one or two specific to what happens, and at most one trending tag;
+- **search keywords** (what someone might type to find it) and a **pinned comment** that invites replies.
+
+What this is built on, and how sure that is. Guidance about TikTok's For You feed commonly points to
+people finishing a video, replaying it, sharing it, commenting and saving it, and to the opening seconds. That
+comes from secondary sources (I could not read TikTok's own explanation), and the exact weightings are not public,
+so nothing here uses numbers. A caption cannot rescue a weak clip: it sets up the first seconds, adds words people
+search for, and invites a reply. The limits above are CLIPPER's choices, not platform rules. Sources also disagree
+on TikTok's caption length limit, and say only the first 80-125 characters show before "more".
+
+**Trends.** There is no official feed of TikTok trends. The
+[Creative Center](https://ads.tiktok.com/help/article/how-to-use-trends) shows trending hashtags, videos and creators by region and industry,
+but only as a dashboard. So you paste in what is trending, and the model is told to use *only* that, since its own idea
+of "trending" is months out of date:
+
+```bash
+clipper trends --init          # creates ./trends.txt with a template and where to look
+clipper trends                 # shows what will be used, how old it is, and which hashtags it offers
+clipper social out/sessions/<session> --niche "reality TV drama" --trends trends.txt
+```
+
+A trend is only used when it genuinely fits the clip, and `trend_tags_used` records which ones were, so you can compare
+posts later. The file is flagged stale after 14 days (a CLIPPER default: trends decay fast, so refresh it weekly). With no
+trends file the captions use general best practice only and the model is told not to claim anything is trending.
+`--niche` (or `CLIPPER_NICHE`) keeps wording and hashtags consistent across an account.
+
+To learn what works for your account, post different angles (tease on one clip, question on the next) and compare
+TikTok's own view and watch-time numbers per post. Nothing here measures that for you yet.
 
 ### Getting clips onto your phone
 

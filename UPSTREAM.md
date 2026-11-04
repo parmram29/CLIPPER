@@ -30,8 +30,9 @@ this repo, as the license requires.
 - `clipper/windowing.py`: overlapping windows, de-duplication and cross-window re-scoring for long videos
 - `clipper/viral_prompt.py`, `clipper/profiles.py`: the default `viral` highlight prompt, its scoring
   rubric, and the `viral` / `podcast` profile choice (the `podcast` profile is upstream's prompt, unchanged)
-- `clipper/social.py`: title, caption and hashtags per clip (replaces a generator that lived in upstream's
-  dropped desktop-app glue, `sidecar.py`)
+- `clipper/social.py`: title, three caption angles, hashtags, search keywords and a pinned comment per clip
+  (replaces a generator that lived in upstream's dropped desktop-app glue, `sidecar.py`)
+- `clipper/trends.py`: reads a user-maintained file of what is trending, since TikTok has no official trends feed
 - `clipper/review.py`, `clipper/export.py`, `clipper/evaluation.py`: review sheet, export folder, and
   agreement between the model's scores and the user's ratings
 - `clipper/llm.py`: a small chat helper for the calls above

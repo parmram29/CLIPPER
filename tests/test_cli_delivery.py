@@ -99,7 +99,11 @@ def test_process_writes_a_title_caption_and_hashtags_for_each_clip(tmp_path, coo
     assert cli.main(["process", str(session), "--cookies", str(cookies_file), "--top", "1"]) == 0
 
     copy = json.loads((session / "social" / "clip_000.json").read_text(encoding="utf-8"))
-    assert copy == {"title": "Do not say that", "caption": "She went there", "hashtags": ["drama", "wtf"], "platform": "tiktok"}
+    # this fake model sends the old single-caption shape, which is still accepted
+    assert (copy["title"], copy["caption"], copy["hashtags"], copy["platform"]) == (
+        "Do not say that", "She went there", ["drama", "wtf"], "tiktok",
+    )
+    assert copy["variants"] == [{"style": "caption", "caption": "She went there"}]
     assert not (session / "social" / "clip_001.json").exists()  # only the clip that was rendered
     assert "She went there #drama #wtf" in capsys.readouterr().out
     prompt = fake_llm.requests[0]["body"]["messages"][-1]["content"]
