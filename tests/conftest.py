@@ -14,6 +14,15 @@ class _Handler(BaseHTTPRequestHandler):
         self.server.requests.append(
             {"path": self.path, "auth": self.headers.get("Authorization"), "body": body}
         )
+        if self.server.reject_response_format and "response_format" in body:
+            error = json.dumps({"error": {"message": "response_format is not supported"}}).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(error)))
+            self.end_headers()
+            self.wfile.write(error)
+            return
+        reply = self.server.reply_fn(body) if self.server.reply_fn else self.server.reply
         payload = {
             "id": "chatcmpl-test",
             "object": "chat.completion",
@@ -22,7 +31,7 @@ class _Handler(BaseHTTPRequestHandler):
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": self.server.reply},
+                    "message": {"role": "assistant", "content": reply},
                     "finish_reason": "stop",
                 }
             ],
@@ -39,9 +48,22 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
 
+@pytest.fixture(autouse=True)
+def _isolate_environment(monkeypatch):
+    """No test may read a real .env or use a real API key (which would spend real money)."""
+    monkeypatch.setenv("CLIPPER_SKIP_DOTENV", "1")
+    for var in ("CLIPPER_API_KEY", "DASHSCOPE_API_KEY", "CLIPPER_BASE_URL", "CLIPPER_MODEL"):
+        monkeypatch.delenv(var, raising=False)
+
+
 @pytest.fixture
 def fake_llm(monkeypatch):
-    """A local OpenAI-compatible server. Set ``.reply``; inspect ``.requests``."""
+    """A local OpenAI-compatible server.
+
+    Set ``.reply`` for a fixed answer, or ``.reply_fn(request_body)`` to answer per request;
+    set ``.reject_response_format`` to make it refuse JSON mode like some providers do.
+    Inspect ``.requests``.
+    """
     # The sandbox sets proxy variables; localhost must bypass them.
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
@@ -49,12 +71,34 @@ def fake_llm(monkeypatch):
     server = HTTPServer(("127.0.0.1", 0), _Handler)
     server.requests = []
     server.reply = "[]"
+    server.reply_fn = None
+    server.reject_response_format = False
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     server.base_url = f"http://127.0.0.1:{server.server_port}/compatible-mode/v1"
     yield server
     server.shutdown()
     server.server_close()
+
+
+def clock_text(t):
+    t = int(t)
+    return f"{t // 3600:02d}:{t % 3600 // 60:02d}:{t % 60:02d}"
+
+
+def make_transcript(minutes, step=5):
+    """A transcript in upstream's format: one line every ``step`` seconds, 'words at <second>'."""
+    return "\n".join(
+        f"[{clock_text(t)},000 - {clock_text(t + step - 1)},000] words at {t}"
+        for t in range(0, int(minutes * 60), step)
+    )
+
+
+def write_srt(path, seconds, step=5):
+    cues = []
+    for i, t in enumerate(range(0, int(seconds), step), 1):
+        cues.append(f"{i}\n{clock_text(t)},000 --> {clock_text(t + step - 1)},000\nwords at {t}\n")
+    path.write_text("\n".join(cues), encoding="utf-8")
 
 
 def highlight(start, end, title="T", score=8, hook="H"):

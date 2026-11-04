@@ -7,7 +7,8 @@ from typing import Any, Callable
 
 from .constants import resolve_output_language
 from .helpers import debug_log
-from .highlight_finder import find_highlights, parse_requested_ranges
+from .highlight_finder import parse_requested_ranges
+from .windowing import DEFAULT_OVERLAP_SECONDS, DEFAULT_WINDOW_SECONDS, find_highlights_windowed
 from .srt_parser import extract_transcript_for_highlight, parse_srt
 from .subtitle_downloader import download_caption_words, download_subtitle_only
 
@@ -100,7 +101,10 @@ def find_highlights_only(
         if exact:
             spans = ", ".join(f"{a:.0f}s-{b:.0f}s" for a, b in exact)
             log(f"Exact time range(s) requested, exempt from the 58-120s rule: {spans}")
-    highlights, token_usage = find_highlights(
+    # CLIPPER change: long videos are split into overlapping windows (see windowing.py);
+    # short ones still go through find_highlights() in a single call, as upstream did.
+    overlap = ai.get("overlap_seconds")
+    highlights, token_usage = find_highlights_windowed(
         transcript=transcript,
         video_info=video_info,
         num_clips=num_clips,
@@ -113,6 +117,9 @@ def find_highlights_only(
         user_direction=user_direction,
         output_language=resolved_language,
         log=log,
+        window_seconds=ai.get("window_seconds") or DEFAULT_WINDOW_SECONDS,
+        overlap_seconds=DEFAULT_OVERLAP_SECONDS if overlap is None else overlap,
+        rerank=ai.get("rerank", True),
     )
 
     if not highlights:
