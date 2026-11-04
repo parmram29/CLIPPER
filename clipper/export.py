@@ -65,6 +65,13 @@ def export_clips(session_dir: str | Path, dest: str | Path | None = None) -> Exp
         lines = [target.name, f"Title:   {title}"]
         if social:
             lines.append(f"Caption: {caption_line(social)}")
+            tags = " ".join(f"#{t}" for t in social.get("hashtags") or [])
+            for variant in (social.get("variants") or [])[1:]:
+                lines.append(f"Alt ({variant.get('style', '?')}): {variant.get('caption', '')} {tags}".rstrip())
+            if social.get("pinned_comment"):
+                lines.append(f"Pinned comment: {social['pinned_comment']}")
+            if social.get("keywords"):
+                lines.append(f"Search keywords: {', '.join(social['keywords'])}")
         elif highlight.get("description"):
             lines.append(f"Caption: {highlight['description']}")
         if highlight.get("hook_text"):
