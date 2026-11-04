@@ -20,6 +20,10 @@ dependencies = [
     "numpy>=1.24.0",
     "Pillow>=10.0.0",
     "python-dotenv>=1.0.0",
+    # CA bundle for HTTPS. Python from python.org on macOS ships without one, and
+    # clipper.cli.ensure_ca_certificates() falls back to this. Declared directly because
+    # it is not guaranteed to arrive as a dependency of something else.
+    "certifi",
 ]
 
 [project.optional-dependencies]
