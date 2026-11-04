@@ -41,6 +41,8 @@ class AIConfig:
 def load_dotenv_if_present(path: str | Path | None = None) -> bool:
     """Load ``.env`` from the current directory (or ``path``) without overriding
     variables that are already set. Returns True if a file was read."""
+    if path is None and os.environ.get("CLIPPER_SKIP_DOTENV"):
+        return False  # set by the test suite so a developer's real .env can never leak in
     env_path = Path(path) if path else Path.cwd() / ".env"
     if not env_path.is_file():
         return False

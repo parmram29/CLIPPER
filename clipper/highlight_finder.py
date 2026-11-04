@@ -144,11 +144,16 @@ def find_highlights(
             f"- Deskripsi: {(video_info.get('description', '') or '')[:500]}"
         )
 
-    direction_block = build_direction_block(user_direction)
+    # CLIPPER fix: the direction block and its reminder contain {output_language} too, but
+    # upstream inserted them after that placeholder had already been replaced, so the model
+    # saw the literal text "{output_language}" whenever --direction was used. Fill it in
+    # here, before they are inserted (doing it afterwards could rewrite the transcript).
+    language_text = output_language or SAME_AS_TRANSCRIPT
+    direction_block = build_direction_block(user_direction).replace("{output_language}", language_text)
     has_placeholder = "{user_direction}" in system_prompt
 
     prompt = system_prompt.replace("{num_clips}", str(request_clips))
-    prompt = prompt.replace("{output_language}", output_language or SAME_AS_TRANSCRIPT)
+    prompt = prompt.replace("{output_language}", language_text)
     prompt = prompt.replace("{video_context}", video_context)
     prompt = prompt.replace("{user_direction}", direction_block)
     prompt = prompt.replace("{transcript}", transcript)
@@ -158,7 +163,11 @@ def find_highlights(
         # loses to recency — so re-anchor the direction after it. A custom system
         # message with no placeholder gets the full block here instead, since
         # that is the only copy it will have.
-        tail = build_direction_reminder(user_direction) if has_placeholder else direction_block
+        tail = (
+            build_direction_reminder(user_direction).replace("{output_language}", language_text)
+            if has_placeholder
+            else direction_block
+        )
         prompt = prompt.rstrip() + "\n" + tail
 
     if temperature is None:

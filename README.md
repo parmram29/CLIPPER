@@ -43,26 +43,85 @@ clipper doctor --check-ai    # verifies ffmpeg, libraries, cookies, and makes on
 
 ```bash
 clipper find "https://www.youtube.com/watch?v=..." --clips 5     # pick highlights, writes a session
-clipper process out/sessions/<session> --top 3                   # render the 3 best
+clipper process out/sessions/<session> --top 3                   # render the 3 best (+ titles/captions)
 clipper run "https://www.youtube.com/watch?v=..." --top 3        # both steps at once
+clipper run "https://www.youtube.com/watch?v=..." --top 3 --export --open   # ...and put them in a folder
 ```
+
+Clips land in `<session>/clips/clip_NNN/master.mp4` with a `data.json` (title, description, hook, timings).
 
 Useful options:
 
 - `--direction "skip the intro; use 12:30 - 13:40"` steers the highlight model. An explicit clock range is used exactly.
-- `--prompt-file niche.txt` replaces the highlight prompt (must contain `{transcript}` and `{num_clips}`). Start from `clipper/prompts.py`.
-- `--reframe auto|face|centered|original` and `--background black|blurred`. `auto` (default) tracks faces if MediaPipe is installed and centers otherwise; an explicit `face` without MediaPipe fails before downloading anything. Face tracking is the slow path; centered is a single ffmpeg pass.
+- `--reframe auto|face|centered|original` and `--background blurred|black`. `auto` (default) tracks faces if MediaPipe is installed and centers otherwise; an explicit `face` without MediaPipe fails before downloading anything. For centered clips the default background is a blurred copy of the video; `--background black` gives plain bars. Face tracking is the slow path; centered is a single ffmpeg pass.
 - `--pick 1,3-4` or `--top N` chooses which clips to render. Rendered clips are skipped on re-run.
 
-Clips land in `<session>/clips/clip_NNN/master.mp4` with a `data.json` (title, description, hook, timings).
+### What it looks for
+
+`--profile viral` (the default) hunts for the moments people watch twice and send to friends:
+drama and beef, arguments, scandal and secrets, wild and outlandish stories, WTF moments, funny
+punchlines, roasts and insults, spicy-but-appropriate moments (flirting, innuendo, "caught in the
+act", never explicit), strong emotion, hot takes, and cliffhangers. It will not pick clips whose
+appeal is a slur or hate aimed at a group, graphic violence, explicit sexual content, or private
+information. Each pick gets a `virality_score` from a fixed rubric (hook 0-3, intensity 0-2,
+surprise 0-2, shareability 0-2, clean cut 0-1) and a `category`.
+
+`--profile podcast` is upstream's original prompt. `--prompt-file niche.txt` replaces either with your own
+(it must contain `{transcript}` and `{num_clips}`; start from `clipper/viral_prompt.py`).
+
+### Long videos and streams
+
+Videos longer than about 37 minutes are not sent in one prompt. The transcript is split into
+overlapping windows (`--window-minutes 30`, `--overlap-minutes 2`), each window proposes
+candidates, duplicates of the same moment are dropped, and one final call re-scores every
+survivor on a single scale, so a 7 from a dull stretch and a 7 from a lively one mean the
+same thing. Pass `--no-rerank` to skip that last call. Shorter videos behave as before.
+
+### Titles, captions and hashtags
+
+`process` and `run` write a cover title, a short hook-first caption, and 3-6 hashtags for each clip to
+`<session>/social/clip_NNN.json` (skipped if no API key is set; `--no-social` turns it off). Run
+`clipper social <session>` to (re)generate them, `--force` to overwrite. The length limits (60 / 150
+characters) are CLIPPER's own choices, not platform rules.
+
+### Getting clips onto your phone
+
+```bash
+clipper export out/sessions/<session> --open
+```
+
+copies the finished clips into one folder (default `~/Desktop/clipper-exports/<session>`) named
+`01 - short-title.mp4`, with a `captions.txt` of ready-to-paste captions and the review sheet. On a Mac,
+select them in Finder and use Share > AirDrop. (AirDrop can't be driven from a command line, so the
+tool stops at the folder.) `--to DIR` exports anywhere, for example a folder that syncs to your phone.
+`--export`, `--export-to DIR` and `--open` do the same straight after `process` or `run`.
+
+### Reviewing picks and measuring the prompt
+
+```bash
+clipper review out/sessions/<session>      # writes review.csv, one row per pick
+```
+
+Import `review.csv` into Google Sheets (File > Import > Upload), fill the `my_rating` column
+(1-10) for the picks you have judged, download it as CSV, and run:
+
+```bash
+clipper eval review.csv --good 7 --k 3
+```
+
+It reports how closely the model's ranking matches yours (Spearman rank correlation), how often its top
+picks are clips you rated well, and the breakdown per category. Change a prompt, re-run, rate, and compare:
+that is how you tell whether a change actually helped. Under about 20 rated clips the numbers are noisy, and
+the report says so. There is no direct Google Sheets sync: that needs a Google login set up in an API project,
+and the CSV import takes seconds.
 
 ## Status and limits
 
-- **Tested (`pytest`, no network except the one-time face-model download):** config handling, the CLI, highlight selection against a real local OpenAI-compatible server, session writing, the centered reframe, caption and hook stages on a synthetic video, and face-tracked reframing on a real face photo (a plain center crop loses the face; the tracked crop keeps it).
-- **Not tested:** an actual YouTube download, a live Qwen call (run `clipper doctor --check-ai`), and face tracking on moving video with several people.
+- **Tested (`pytest`):** config handling, the CLI, highlight selection, windowing and re-scoring against a real local OpenAI-compatible server, session writing, post copy, review/export/eval, the centered and blurred reframes, caption and hook stages on a synthetic video, and face-tracked reframing on a real face photo.
+- **Run on a real video:** one hour-long episode, end to end on a Mac, through `qwen-flash`. The windowing, the viral prompt and the re-scoring have only been exercised against a stand-in model, not a live one, so how well the new prompt picks is unmeasured until you rate some picks with `clipper eval`.
 - **Needs YouTube captions.** There is no speech-to-text fallback yet, so a video without a caption track fails. Word-by-word captions also come from YouTube's track.
-- **Whole transcript in one prompt.** Very long videos can exceed the model's context window.
-- **The default prompt is tuned for podcasts** (conflict, confession, punchlines). Use `--prompt-file` per niche.
+- **Clip length is fixed at about 60-120 s** (upstream's validator keeps only 58-120 s clips).
+- **Scores are the model's opinion.** They are only as good as their agreement with your ratings, which is what `clipper eval` measures.
 - **Cookies are your logged-in session.** Treat the file like a password.
 - Only clip footage you have the rights to use. YouTube's terms and copyright law apply.
 

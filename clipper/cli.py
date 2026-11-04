@@ -1,9 +1,13 @@
 """Headless command-line interface for CLIPPER.
 
     clipper doctor [--check-ai]
-    clipper find URL [--clips N] [--direction TEXT] [--prompt-file FILE] ...
-    clipper process SESSION_DIR [--pick 1,3-4 | --top N] [--reframe face|centered|original] ...
+    clipper find URL [--clips N] [--profile viral|podcast] [--direction TEXT] ...
+    clipper process SESSION_DIR [--pick 1,3-4 | --top N] [--reframe ...] [--export] ...
     clipper run URL [--clips N] [--top N] ...
+    clipper social SESSION_DIR      write a title, caption and hashtags for each clip
+    clipper review SESSION_DIR      write a review sheet (CSV) to rate the picks
+    clipper export SESSION_DIR      gather finished clips into one folder (for AirDrop)
+    clipper eval review.csv         compare the model's scores with your ratings
 
 Not part of the upstream yt-short-clipper code, which drives these same pipeline
 functions from a desktop GUI over a JSON-lines sidecar protocol.
@@ -22,7 +26,8 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
-from . import config
+from . import config, profiles
+from .windowing import DEFAULT_OVERLAP_SECONDS, DEFAULT_WINDOW_SECONDS
 
 DEFAULT_OUT = "out"
 DEFAULT_TOP = 3
@@ -237,10 +242,27 @@ def resolve_cookies(cli_value: str | None, env: Mapping[str, str] | None = None)
 # ---------------------------------------------------------------------------
 
 
+def prompt_and_window_settings(args: argparse.Namespace) -> dict[str, Any]:
+    """The highlight prompt plus the long-video windowing options, as the ``ai`` dict keys
+    upstream's session code reads."""
+    if args.window_minutes <= 0 or args.overlap_minutes < 0 or args.overlap_minutes >= args.window_minutes:
+        raise ValueError("--window-minutes must be positive and larger than --overlap-minutes")
+    return {
+        # --prompt-file wins over --profile
+        "system_message": (
+            load_prompt_file(args.prompt_file)
+            if args.prompt_file
+            else profiles.get_profile_prompt(args.profile)
+        ),
+        "window_seconds": args.window_minutes * 60,
+        "overlap_seconds": args.overlap_minutes * 60,
+        "rerank": not args.no_rerank,
+    }
+
+
 def _find(args: argparse.Namespace) -> dict[str, Any]:
     ai = config.load_ai_config().as_dict()
-    if args.prompt_file:
-        ai["system_message"] = load_prompt_file(args.prompt_file)
+    ai.update(prompt_and_window_settings(args))
     cookies = resolve_cookies(args.cookies)
 
     from .session import find_highlights_only
@@ -273,6 +295,10 @@ def _process(
     hook: bool,
     lead_in: float | None,
     tail_out: float | None,
+    social: bool = True,
+    export: bool = False,
+    export_to: str | None = None,
+    open_after: bool = False,
 ) -> dict[str, Any]:
     session = load_session(session_dir)
     chosen = select_highlights(session, pick=pick, top=top)
@@ -299,7 +325,62 @@ def _process(
     for r in result["results"]:
         note = "  (already rendered, skipped)" if r.get("skipped") else ""
         print(f"  {r['output_path']}{note}")
+
+    if social:
+        _generate_social(session_dir, session, chosen)
+    if export or export_to or open_after:
+        _export(session_dir, export_to, open_after)
     return result
+
+
+def _generate_social(
+    session_dir: str | Path,
+    session: Mapping[str, Any],
+    chosen: list[dict[str, Any]],
+    *,
+    ai: Mapping[str, Any] | None = None,
+    force: bool = False,
+) -> int:
+    """Write a title, caption and hashtags for each chosen clip. Returns how many were written.
+
+    A failure here never fails the run: the clips are already rendered by this point.
+    """
+    from . import social as social_mod
+
+    if ai is None:
+        try:
+            ai = config.load_ai_config().as_dict()
+        except config.ConfigError:
+            _log("Skipping titles and captions: no AI key configured (set CLIPPER_API_KEY).")
+            return 0
+
+    language = session.get("output_language_name") or "the same language as the transcript"
+    written = 0
+    for h in chosen:
+        index = h["_highlight_index"]
+        if not force and social_mod.load_social(session_dir, index):
+            continue
+        try:
+            copy = social_mod.generate_social_copy(h, ai, language=language)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"Could not write a caption for clip {index + 1}: {str(exc)[:200]}")
+            continue
+        social_mod.save_social(session_dir, index, copy)
+        written += 1
+        _log(f"Clip {index + 1}: {copy['title']}\n   {social_mod.caption_line(copy)}")
+    return written
+
+
+def _export(session_dir: str | Path, dest: str | None, open_after: bool) -> None:
+    from . import export as export_mod
+
+    result = export_mod.export_clips(session_dir, dest)
+    print(f"\nExported {len(result.clips)} clip(s) to: {result.dest}")
+    print("   captions.txt has a ready-to-paste caption for each; review.csv is the review sheet.")
+    if sys.platform == "darwin":
+        print("   To AirDrop: select the clips in Finder, then Share > AirDrop.")
+    if open_after and not export_mod.reveal(result.dest):
+        print(f"   (could not open the folder automatically; it is at {result.dest})")
 
 
 def _cmd_find(args: argparse.Namespace) -> int:
@@ -309,36 +390,66 @@ def _cmd_find(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_process(args: argparse.Namespace) -> int:
-    _process(
-        args.session_dir,
+def _process_options(args: argparse.Namespace) -> dict[str, Any]:
+    """The rendering and delivery options shared by `process` and `run`."""
+    return dict(
         cookies=args.cookies,
-        pick=args.pick,
-        top=args.top,
         reframe=args.reframe,
         background=args.background,
         captions=not args.no_captions,
         hook=not args.no_hook,
         lead_in=args.lead_in,
         tail_out=args.tail_out,
+        social=not args.no_social,
+        export=args.export,
+        export_to=args.export_to,
+        open_after=args.open,
     )
+
+
+def _cmd_process(args: argparse.Namespace) -> int:
+    _process(args.session_dir, pick=args.pick, top=args.top, **_process_options(args))
     return 0
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
     session = _find(args)
-    _process(
-        session["session_dir"],
-        cookies=args.cookies,
-        pick=None,
-        top=args.top,
-        reframe=args.reframe,
-        background=args.background,
-        captions=not args.no_captions,
-        hook=not args.no_hook,
-        lead_in=args.lead_in,
-        tail_out=args.tail_out,
-    )
+    _process(session["session_dir"], pick=None, top=args.top, **_process_options(args))
+    return 0
+
+
+def _cmd_social(args: argparse.Namespace) -> int:
+    session = load_session(args.session_dir)
+    chosen = select_highlights(session, pick=args.pick, top=args.top)
+    ai = config.load_ai_config().as_dict()
+    written = _generate_social(args.session_dir, session, chosen, ai=ai, force=args.force)
+    if written == 0:
+        print("Nothing new to write (use --force to regenerate existing captions).")
+    return 0
+
+
+def _cmd_review(args: argparse.Namespace) -> int:
+    from . import review
+
+    path = review.write_review_csv(args.session_dir, args.out)
+    print(f"Review sheet: {path}")
+    print("\nTo rate the picks in Google Sheets:")
+    print("  1. Go to sheets.google.com and choose File > Import > Upload, then pick this file.")
+    print("  2. Fill the my_rating column (1-10) for the clips you have judged.")
+    print("  3. File > Download > Comma-separated values, then run:  clipper eval <that file>")
+    return 0
+
+
+def _cmd_export(args: argparse.Namespace) -> int:
+    _export(args.session_dir, args.to, args.open)
+    return 0
+
+
+def _cmd_eval(args: argparse.Namespace) -> int:
+    from . import evaluation
+
+    rated = evaluation.load_rated(args.csv)
+    print(evaluation.format_report(evaluation.evaluate(rated, good=args.good, k=args.k)))
     return 0
 
 
@@ -540,8 +651,32 @@ def build_parser() -> argparse.ArgumentParser:
             "--out-language", default="auto", help="language for titles/hooks (default: follow the video)"
         )
         sp.add_argument(
+            "--profile",
+            choices=profiles.PROFILE_NAMES,
+            default=profiles.DEFAULT_PROFILE,
+            help="what to look for: viral = drama, arguments, scandal, wild/WTF moments, funny "
+            "punchlines, roasts, spicy-but-appropriate, emotion (default); podcast = upstream's prompt",
+        )
+        sp.add_argument(
             "--prompt-file",
-            help="custom highlight prompt; must contain {transcript} and {num_clips}",
+            help="custom highlight prompt (overrides --profile); must contain {transcript} and {num_clips}",
+        )
+        sp.add_argument(
+            "--window-minutes",
+            type=float,
+            default=DEFAULT_WINDOW_SECONDS / 60,
+            help="long videos are scored in windows of this length (default 30)",
+        )
+        sp.add_argument(
+            "--overlap-minutes",
+            type=float,
+            default=DEFAULT_OVERLAP_SECONDS / 60,
+            help="overlap between windows, so a moment on a boundary is not cut in half (default 2)",
+        )
+        sp.add_argument(
+            "--no-rerank",
+            action="store_true",
+            help="skip the final call that re-scores all windows' picks on one shared scale",
         )
         sp.add_argument("--out", default=DEFAULT_OUT, help=f"output folder (default ./{DEFAULT_OUT})")
         add_cookies(sp)
@@ -556,11 +691,21 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument(
             "--background",
             choices=["black", "blurred"],
-            default="black",
-            help="bars for --reframe centered (default black)",
+            default="blurred",
+            help="behind the video when --reframe centered: a blurred copy of it (default) or black bars",
         )
         sp.add_argument("--no-captions", action="store_true", help="skip word-by-word captions")
         sp.add_argument("--no-hook", action="store_true", help="skip the hook text overlay")
+        sp.add_argument(
+            "--no-social", action="store_true", help="skip the title, caption and hashtags for each clip"
+        )
+        sp.add_argument(
+            "--export",
+            action="store_true",
+            help="afterwards copy the clips into one folder (default ~/Desktop/clipper-exports/<session>)",
+        )
+        sp.add_argument("--export-to", metavar="DIR", help="like --export, into this folder")
+        sp.add_argument("--open", action="store_true", help="after exporting, open the folder in Finder")
         sp.add_argument("--lead-in", type=float, help="seconds added before each clip (default 1.5)")
         sp.add_argument("--tail-out", type=float, help="seconds added after each clip (default 2.5)")
 
@@ -588,6 +733,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_process_args(run)
     run.set_defaults(func=_cmd_run)
+
+    social = sub.add_parser("social", help="write a title, caption and hashtags for each clip")
+    social.add_argument("session_dir")
+    social_group = social.add_mutually_exclusive_group()
+    social_group.add_argument("--pick", help="1-based clip numbers, e.g. 1,3-4 (default: all)")
+    social_group.add_argument("--top", type=int, help="only the N highest-scoring clips")
+    social.add_argument("--force", action="store_true", help="regenerate captions that already exist")
+    social.set_defaults(func=_cmd_social)
+
+    review = sub.add_parser("review", help="write a review sheet (CSV) to rate the picks")
+    review.add_argument("session_dir")
+    review.add_argument("--out", metavar="FILE", help="where to write it (default: <session>/review.csv)")
+    review.set_defaults(func=_cmd_review)
+
+    export = sub.add_parser("export", help="gather finished clips into one folder, ready to AirDrop")
+    export.add_argument("session_dir")
+    export.add_argument("--to", metavar="DIR", help="destination (default ~/Desktop/clipper-exports/<session>)")
+    export.add_argument("--open", action="store_true", help="open the folder in Finder afterwards")
+    export.set_defaults(func=_cmd_export)
+
+    evaluate = sub.add_parser(
+        "eval", help="compare the model's virality scores with your own ratings from a review sheet"
+    )
+    evaluate.add_argument("csv", help="a review sheet with the my_rating column filled in")
+    evaluate.add_argument("--good", type=float, default=7.0, help="your rating that counts as a good clip (default 7)")
+    evaluate.add_argument("--k", type=int, default=3, help="check the model's top K picks (default 3)")
+    evaluate.set_defaults(func=_cmd_eval)
 
     return parser
 

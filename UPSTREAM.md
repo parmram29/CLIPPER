@@ -24,9 +24,17 @@ this repo, as the license requires.
 ## Added by CLIPPER
 
 - `clipper/cli.py`, `clipper/__main__.py`: the headless `clipper` command
-  (`doctor`, `find`, `process`, `run`) calling upstream's `find_highlights_only` and
-  `process_selected_highlights` directly
+  (`doctor`, `find`, `process`, `run`, `social`, `review`, `export`, `eval`) calling upstream's
+  `find_highlights_only` and `process_selected_highlights` directly
 - `clipper/config.py`: `.env` / environment configuration for any OpenAI-compatible endpoint
+- `clipper/windowing.py`: overlapping windows, de-duplication and cross-window re-scoring for long videos
+- `clipper/viral_prompt.py`, `clipper/profiles.py`: the default `viral` highlight prompt, its scoring
+  rubric, and the `viral` / `podcast` profile choice (the `podcast` profile is upstream's prompt, unchanged)
+- `clipper/social.py`: title, caption and hashtags per clip (replaces a generator that lived in upstream's
+  dropped desktop-app glue, `sidecar.py`)
+- `clipper/review.py`, `clipper/export.py`, `clipper/evaluation.py`: review sheet, export folder, and
+  agreement between the model's scores and the user's ratings
+- `clipper/llm.py`: a small chat helper for the calls above
 - `pyproject.toml`, `setup.sh`, `.env.example`, `tests/`
 
 ## Modified upstream code
@@ -37,6 +45,12 @@ this repo, as the license requires.
   (with an install hint on failure) instead of at module level. Upstream's module-level
   import made MediaPipe a hard requirement for the whole package, but its current
   releases have no macOS Intel wheels, so such installs failed outright.
+- `clipper/session.py`: `find_highlights_only()` calls `find_highlights_windowed()` instead of
+  `find_highlights()` directly. For a short video that is the same single call as before.
+- `clipper/highlight_finder.py`: **bug fix.** The `--direction` block and its reminder contain
+  `{output_language}`, but upstream inserted them after that placeholder had already been replaced, so the
+  model saw the literal text `{output_language}` whenever a direction was used. They are now filled in before
+  insertion.
 - `clipper/constants.py`: one docstring now names the new package.
 - The package was renamed from `yt_short_clipper_core` to `clipper`. All upstream
   imports inside the core are relative, so no other code changed.
@@ -45,8 +59,7 @@ this repo, as the license requires.
 
 - No speech-to-text. Highlights and word-by-word captions both come from YouTube's own
   caption tracks, so a video without captions fails with "No subtitle available".
-- The whole transcript is sent to the model in one prompt, with no chunking.
-- The default prompt targets podcast footage and a 58-120 s clip length.
+- Clips are kept only if they run 58-120 s (hard-coded in `_validate_highlights`).
 - Downloads need a logged-in YouTube `cookies.txt`.
 
 ## History
