@@ -86,7 +86,7 @@ That finds highlights, renders the best three, writes their captions and hashtag
 | `clipper export SESSION` | Copies finished clips into one folder. |
 | `clipper review SESSION` | Writes a spreadsheet so you can rate the picks. |
 | `clipper eval review.csv` | Compares your ratings with the AI's scores. |
-| `clipper trends` | Shows or refreshes the trend list that captions use. |
+| `clipper trends` | Shows or refreshes the trend list that captions use. `--diagnose` tests web search step by step. |
 
 Options you'll probably want:
 
@@ -180,7 +180,7 @@ Run `clipper doctor` first. Most problems show up there.
 
 **`AllocationQuota.FreeTierOnly` or "free quota has been exhausted"**: that's Alibaba refusing the request, not CLIPPER. It happens when a model's free allowance is used up and the "free quota only" switch is on, which stops Alibaba from billing you. Either turn the switch off for that model in the Alibaba console (their [docs](https://help.aliyun.com/en/model-studio/new-free-quota) say it can take about 30 minutes, and an account that isn't identity-verified has to verify and top up first), or use a model that still has free quota. Check prices before you switch to paying.
 
-**Trends come back empty**: run `clipper trends --refresh` to see why. Captions work without trends, so `CLIPPER_AUTO_TRENDS=0` is a fine answer.
+**Trends come back empty**: run `clipper trends --diagnose`. It sends each web-search request form on its own, shows whether Alibaba accepted or refused it (with the reason), lists the pages the search found, and prints what the model says when it isn't boxed into a strict format. If the pages are off-topic or in another language, the search engine just isn't finding what you need. Captions work without trends, so `CLIPPER_AUTO_TRENDS=0` is a fine answer.
 
 ## Credits and license
 

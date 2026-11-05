@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 ZERO_USAGE = {"prompt_tokens": 0, "completion_tokens": 0}
 
@@ -73,9 +73,9 @@ class SearchUnavailable(RuntimeError):
 # Alibaba's documented switch is `enable_search`; the extra options below are tried first and
 # dropped if the endpoint rejects them. The OpenAI SDK has no field for any of this, so it
 # goes in extra_body, which is merged into the request.
-_SEARCH_ATTEMPTS: tuple[dict[str, Any], ...] = (
-    {"enable_search": True, "search_options": {"forced_search": True, "enable_source": True}},
-    {"enable_search": True},
+_COMPAT_ATTEMPTS: tuple[tuple[str, dict[str, Any]], ...] = (
+    ("enable_search + options", {"enable_search": True, "search_options": {"forced_search": True, "enable_source": True}}),
+    ("enable_search only", {"enable_search": True}),
 )
 
 
@@ -117,6 +117,11 @@ _NATIVE_ATTEMPTS: tuple[tuple[str, dict[str, Any]], ...] = (
 )
 
 
+def search_forms(api: str) -> tuple[tuple[str, dict[str, Any]], ...]:
+    """The request forms for a route, most capable first (used to test each one on its own)."""
+    return _NATIVE_ATTEMPTS if api == "dashscope" else _COMPAT_ATTEMPTS
+
+
 def native_search_url(base_url: str) -> str:
     """Alibaba's native text-generation endpoint on the same host as the compatible-mode URL."""
     from urllib.parse import urlparse
@@ -134,6 +139,7 @@ def chat_with_search_native(
     max_tokens: int = 1500,
     timeout: float = 180.0,
     info: dict[str, Any] | None = None,
+    attempts: Sequence[tuple[str, dict[str, Any]]] | None = None,
 ) -> tuple[str, dict[str, int], list[dict[str, Any]]]:
     """The same search call through Alibaba's NATIVE API, which (unlike the OpenAI-compatible
     endpoint) can return the sources it used, as ``output.search_info.search_results``.
@@ -152,7 +158,10 @@ def chat_with_search_native(
 
     data: dict[str, Any] | None = None
     last_error: Exception | None = None
-    for label, extra in _NATIVE_ATTEMPTS:
+    refused: list[str] = []
+    if info is not None:
+        info["refused"] = refused
+    for label, extra in (attempts if attempts is not None else _NATIVE_ATTEMPTS):
         body = {
             "model": ai["model"],
             "input": {"messages": messages},
@@ -178,8 +187,10 @@ def chat_with_search_native(
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "replace")[:700]
             last_error = RuntimeError(f"HTTP {exc.code}: {detail}")
+            refused.append(f"{label}: {str(last_error)[:300]}")
         except (urllib.error.URLError, OSError, ValueError) as exc:
             last_error = exc
+            refused.append(f"{label}: {type(exc).__name__}: {str(exc)[:300]}")
     if data is None:
         raise SearchUnavailable(f"native web search request failed: {str(last_error)[:700]}") from last_error
 
@@ -212,6 +223,7 @@ def chat_with_search(
     timeout: float = 180.0,
     info: dict[str, Any] | None = None,
     api: str = "compat",
+    attempts: Sequence[tuple[str, dict[str, Any]]] | None = None,
 ) -> tuple[str, dict[str, int], list[dict[str, Any]]]:
     """A chat call with the provider's web search switched on.
 
@@ -223,11 +235,13 @@ def chat_with_search(
     returns sources. ``api="dashscope"`` uses Alibaba's native API, which can.
 
     If ``info`` is given it is filled with which form of the request was accepted
-    (``info["request"]``), for diagnostics.
+    (``info["request"]``) and why any earlier form was refused (``info["refused"]``), for
+    diagnostics. ``attempts`` restricts the forms tried, for testing one on its own.
     """
     if api == "dashscope":
         return chat_with_search_native(
-            ai, user, system=system, temperature=temperature, max_tokens=max_tokens, timeout=timeout, info=info
+            ai, user, system=system, temperature=temperature, max_tokens=max_tokens, timeout=timeout,
+            info=info, attempts=attempts,
         )
     from openai import OpenAI
 
@@ -250,14 +264,18 @@ def chat_with_search(
 
     response = None
     last_error: Exception | None = None
-    for extra in _SEARCH_ATTEMPTS:
+    refused: list[str] = []
+    if info is not None:
+        info["refused"] = refused
+    for label, extra in (attempts if attempts is not None else _COMPAT_ATTEMPTS):
         try:
             response = client.chat.completions.create(**base, extra_body=extra)
             if info is not None:
-                info["request"] = "enable_search + options" if "search_options" in extra else "enable_search only"
+                info["request"] = label
             break
         except Exception as exc:  # noqa: BLE001 - try the plainer request before giving up
             last_error = exc
+            refused.append(f"{label}: {str(exc)[:300]}")
     if response is None:
         raise SearchUnavailable(f"web search request failed: {str(last_error)[:700]}") from last_error
 

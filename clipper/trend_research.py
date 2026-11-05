@@ -86,6 +86,7 @@ class Report:
     returned: list[str] = field(default_factory=list)  # a few of the pages the search returned
     reply_preview: str = ""  # the start of the model's reply
     request: str = ""  # which form of the search request the endpoint accepted
+    refused: list[str] = field(default_factory=list)  # forms tried first and refused, with the reason
 
     def is_empty(self) -> bool:
         return not (self.hashtags or self.formats or self.topics)
@@ -96,11 +97,16 @@ class Report:
 # ---------------------------------------------------------------------------
 
 
-def build_prompt(*, niche: str | None, region: str | None, platform: str, today: date) -> str:
+def _where_about(niche: str | None, region: str | None) -> tuple[str, str]:
     where = f", for {region.strip()}" if region and region.strip() else ", worldwide (English-language)"
     about = (
         f", in the niche: {niche.strip()}" if niche and niche.strip() else ", in entertainment and viral clips"
     )
+    return where, about
+
+
+def build_prompt(*, niche: str | None, region: str | None, platform: str, today: date) -> str:
+    where, about = _where_about(niche, region)
     return (
         _PROMPT.replace("{today}", today.isoformat())
         .replace("{platform}", platform)
@@ -240,6 +246,7 @@ def research(
         returned=returned[:5],
         reply_preview=" ".join(text.split())[:300],
         request=request_info.get("request", ""),
+        refused=list(request_info.get("refused", []))[:5],
     )
 
 
@@ -254,6 +261,9 @@ def explain_empty(report: Report) -> list[str]:
         f"Sources returned by the search: {report.n_sources}. Items the model proposed: {report.proposed} "
         f"(dropped as unverifiable: {report.dropped}).",
     ]
+    if report.refused:
+        lines.append("These request forms were refused first, so a simpler one was used:")
+        lines += [f"   {entry}" for entry in report.refused]
     native = report.request.startswith("native")
     if report.n_sources == 0 and report.proposed == 0 and not native:
         lines.append(
@@ -292,6 +302,59 @@ def explain_empty(report: Report) -> list[str]:
     if report.reply_preview:
         lines.append(f"The model's reply began: {report.reply_preview}")
     return lines
+
+
+_HOW_TO_READ = [
+    "How to read this:",
+    "  - Every form REFUSED: web search is not available for this model or account; the messages say why.",
+    "  - Accepted, but 0 sources: the model most likely did not search at all.",
+    "  - Sources whose titles are off-topic or in another language: the search engine is not finding English",
+    "    TikTok trend pages for this niche, so automatic trends will keep coming back empty.",
+    "  - An answer that lists real hashtags with sources: the search works, and the strict research prompt",
+    "    is what is too strict.",
+]
+
+
+def diagnose(
+    ai: Mapping[str, Any],
+    *,
+    niche: str | None = None,
+    region: str | None = None,
+    platform: str = "TikTok",
+    today: date | None = None,
+    api: str = "dashscope",
+) -> list[str]:
+    """Test each request form on its own with a plain question, and report exactly what came back.
+
+    It sends one small call per form (no fallback between them), so a refusal is shown with its
+    reason instead of being papered over, and prints the sources' titles and the start of the
+    model's free-form answer, so it is clear whether the search finds relevant pages at all.
+    It writes nothing to the cache.
+    """
+    where, about = _where_about(niche, region)
+    question = (
+        f"What are the top trending hashtags on {platform} this week "
+        f"(today is {(today or date.today()).isoformat()}){where}{about}? "
+        "List up to 10 and name the page you found each one on."
+    )
+    lines = [f"Model: {ai.get('model', '?')}    route: {api}", f"Question: {question}", ""]
+    for label, extra in llm.search_forms(api):
+        try:
+            text, _usage, sources = llm.chat_with_search(
+                ai, question, api=api, attempts=((label, extra),), max_tokens=700
+            )
+        except llm.SearchUnavailable as exc:
+            lines += [f"[{label}] REFUSED: {str(exc)[:500]}", ""]
+            continue
+        except Exception as exc:  # noqa: BLE001 - a diagnosis must report, not crash
+            lines += [f"[{label}] FAILED: {type(exc).__name__}: {str(exc)[:300]}", ""]
+            continue
+        lines.append(f"[{label}] accepted. Sources returned: {len(sources)}")
+        for source in sources[:8]:
+            title = " ".join(str(source.get("title") or "?").split())[:70]
+            lines.append(f"    - {title} | {source.get('url', '?')}")
+        lines += [f"    answer: {' '.join(text.split())[:600]}", ""]
+    return lines + _HOW_TO_READ
 
 
 # ---------------------------------------------------------------------------
