@@ -146,3 +146,30 @@ def test_blur_background_uses_the_spelling_upstream_expects():
     assert args.background == "blurred"
     with pytest.raises(SystemExit):
         cli.build_parser().parse_args(["process", "dir", "--background", "blur"])
+
+
+def test_the_help_says_this_is_built_on_yt_short_clipper(capsys):
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["--help"])
+    out = capsys.readouterr().out
+    assert "Built on top of yt-short-clipper" in out and "github.com/jipraks/yt-short-clipper" in out
+
+
+def test_the_package_metadata_links_to_the_original_project():
+    import tomllib
+    from pathlib import Path
+
+    data = tomllib.loads((Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8"))
+    assert data["project"]["urls"]["Upstream"] == "https://github.com/jipraks/yt-short-clipper"
+
+
+def test_the_readme_credits_the_original_project_near_the_top():
+    from pathlib import Path
+
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
+    top = readme[:1800]  # the intro, before any setup instructions
+    assert "Built on top of an existing project" in top
+    assert "github.com/jipraks/yt-short-clipper" in top and "MIT" in top
+    # and the license file still carries the original author's notice, as the license requires
+    license_text = (Path(__file__).resolve().parent.parent / "LICENSE").read_text(encoding="utf-8")
+    assert "Aji Prakoso" in license_text

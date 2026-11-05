@@ -16,7 +16,7 @@ from test_trend_research import PAGE, RESEARCH_JSON, SEARCH_INFO
 
 
 def _is_research(body):
-    return "Use web search" in body["messages"][-1]["content"]
+    return "Report only what you actually found" in body["messages"][-1]["content"]  # a marker line of the research prompt
 
 
 def _two_stage(server, research=RESEARCH_JSON, sources=SEARCH_INFO):

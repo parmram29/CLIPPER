@@ -376,12 +376,23 @@ def search_ai_config(env: Mapping[str, str] | None = None) -> dict[str, str] | N
 
 
 def search_api(env: Mapping[str, str] | None = None) -> str:
-    """Which route to use for web search: ``compat`` (default) or Alibaba's native ``dashscope``."""
+    """Which route to use for web search: ``dashscope`` (Alibaba's native API) or ``compat``.
+
+    ``CLIPPER_SEARCH_API`` can force either. Left unset, an Alibaba endpoint uses the native API,
+    which returns the sources a search used (the OpenAI-compatible endpoint never does, per
+    Alibaba's docs) and was confirmed to run searches on a real account; any other provider uses
+    the OpenAI-compatible route.
+    """
+    from urllib.parse import urlparse
+
     env = os.environ if env is None else env
-    value = (env.get("CLIPPER_SEARCH_API") or "compat").strip().lower() or "compat"
-    if value not in ("compat", "dashscope"):
-        raise config.ConfigError(f"CLIPPER_SEARCH_API must be 'compat' or 'dashscope', not {value!r}")
-    return value
+    value = (env.get("CLIPPER_SEARCH_API") or "auto").strip().lower() or "auto"
+    if value not in ("auto", "compat", "dashscope"):
+        raise config.ConfigError(f"CLIPPER_SEARCH_API must be 'auto', 'compat' or 'dashscope', not {value!r}")
+    if value != "auto":
+        return value
+    host = urlparse(env.get("CLIPPER_BASE_URL") or config.DEFAULT_BASE_URL).hostname or ""
+    return "dashscope" if host.endswith("aliyuncs.com") else "compat"
 
 
 def load_trends_for_run(
@@ -819,6 +830,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="clipper",
         description="Turn long videos into vertical 9:16 short-form clips.",
+        epilog="Built on top of yt-short-clipper by Aji Prakoso (jipraks), MIT licensed: "
+        "https://github.com/jipraks/yt-short-clipper",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
