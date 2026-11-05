@@ -39,12 +39,16 @@ this repo, as the license requires.
 - `clipper/review.py`, `clipper/export.py`, `clipper/evaluation.py`: review sheet, export folder, and
   agreement between the model's scores and the user's ratings
 - `clipper/llm.py`: a small chat helper for the calls above
+- `clipper/diagnostics.py`: the facts printed when a download dies with a cryptic file error (certifi's
+  certificate file, cookies, free disk space), and a repair for a stale remembered certificate path. The CLI
+  uses it so that one failed clip no longer stops the others (`cli.render_clips`)
 - `pyproject.toml`, `requirements.txt` (pinned versions for dependency scanners), `setup.sh`, `.env.example`, `tests/`
 
 ## Modified upstream code
 
 - `clipper/video_processor.py`: `_get_cookies_path()` first honours `$CLIPPER_COOKIES`,
-  so the section download uses the cookies file the CLI validated.
+  so the section download uses the cookies file the CLI validated. The yt-dlp options also get
+  `verbose` when `$CLIPPER_YTDLP_VERBOSE` is set, which shows yt-dlp's debug output and error tracebacks.
 - `clipper/portrait.py`: MediaPipe is imported lazily inside `convert_to_portrait()`
   (with an install hint on failure) instead of at module level. Upstream's module-level
   import made MediaPipe a hard requirement for the whole package, but its current

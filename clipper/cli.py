@@ -17,6 +17,7 @@ functions from a desktop GUI over a JSON-lines sidecar protocol.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib
 import importlib.util
 import json
@@ -25,9 +26,9 @@ import ssl
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
-from . import config, profiles
+from . import config, diagnostics, profiles
 from .windowing import DEFAULT_OVERLAP_SECONDS, DEFAULT_WINDOW_SECONDS
 
 DEFAULT_OUT = "out"
@@ -323,29 +324,140 @@ def _process(
         _log("MediaPipe not installed: using --reframe centered (no face tracking)")
     resolve_cookies(cookies)
 
-    from .clip_processor import process_selected_highlights
-
-    result = process_selected_highlights(
+    result = render_clips(
         url=session["url"],
         highlights=chosen,
-        session_dir=str(session_dir),
+        session_dir=session_dir,
         options=build_options(
             reframe=reframe, background=background, captions=captions, hook=hook
         ),
         # None falls back to upstream's defaults (1.5s lead-in, 2.5s tail-out).
         ai={"clip_padding": {"lead_in": lead_in, "tail_out": tail_out}},
-        log=_log,
     )
     print("\nClips:")
     for r in result["results"]:
         note = "  (already rendered, skipped)" if r.get("skipped") else ""
         print(f"  {r['output_path']}{note}")
 
+    failed = result["failed"]
+    if failed:
+        print("\nNot rendered:")
+        for f in failed:
+            print(f"  {f['title']}: {f['error'][:200]}")
+        hints = {h for h in (diagnostics.explain(f["error"]) for f in failed) if h}
+        for hint in sorted(hints):
+            print(f"  {hint}")
+        print("Run the same command again to retry just these. Clips that are finished are skipped.")
+
     if social:
-        _generate_social(session_dir, session, chosen, niche=niche_text, trends=trends)
+        failed_indexes = {f["clip_index"] for f in failed}
+        rendered = [h for h in chosen if h.get("_highlight_index") not in failed_indexes]
+        _generate_social(session_dir, session, rendered, niche=niche_text, trends=trends)
     if export or export_to or open_after:
         _export(session_dir, export_to, open_after)
     return result
+
+
+def _numbered(log: Callable[[str], None], k: int, total: int) -> Callable[[str], None]:
+    """The renderer numbers clips from 1 on every call. Given one clip at a time, number them properly."""
+
+    def numbered(message: str) -> None:
+        if k > 1 and message.startswith(("Clip padding:", "Reframe mode:")):
+            return  # already said for the first clip
+        if message.startswith("All 1 clips processed"):
+            return
+        log(message.replace("[1/1]", f"[{k}/{total}]").replace("Processing clip 1/1:", f"Processing clip {k}/{total}:"))
+
+    return numbered
+
+
+def _rendered_master(session_dir: str | Path, highlight: Mapping[str, Any]) -> Path | None:
+    master = Path(session_dir) / "clips" / f"clip_{highlight['_highlight_index']:03d}" / "master.mp4"
+    return master if master.is_file() else None
+
+
+def render_clips(
+    *,
+    url: str,
+    highlights: list[dict[str, Any]],
+    session_dir: str | Path,
+    options: dict[str, Any],
+    ai: dict[str, Any],
+) -> dict[str, Any]:
+    """Render the chosen clips. If one fails, keep the others instead of losing the whole run.
+
+    Normally this is one call to the renderer, exactly as upstream does it. If that call stops with an
+    error, the clips before the failing one are already on disk, so the rest are rendered one at a time:
+    the failing clip gets one more try only when the error looks like a problem with the download setup
+    (and then with yt-dlp's full debug output, plus a printout of what it needs), and a failure never
+    stops the clips after it. Returns ``{"results": [...], "failed": [...]}``.
+    """
+    from .clip_processor import process_selected_highlights
+
+    def render(batch: list[dict[str, Any]], log: Callable[[str], None]) -> dict[str, Any]:
+        return process_selected_highlights(
+            url=url, highlights=batch, session_dir=str(session_dir), options=options, ai=ai, log=log
+        )
+
+    try:
+        return {"results": render(highlights, _log)["results"], "failed": []}
+    except Exception as exc:  # Ctrl-C is not an Exception, so it still stops everything
+        stopped = exc
+
+    message = str(stopped)
+    _log(f"Rendering stopped: {message[:300]}")
+    environment_error = diagnostics.looks_like_environment_error(message)
+    if environment_error:
+        for line in diagnostics.describe_environment(work_dir=str(session_dir)):
+            _log(line)
+        if diagnostics.certifi_problem() and diagnostics.repair_certifi():
+            _log("certifi's certificate file had been forgotten in memory; it has been found again.")
+        _log("Trying that clip once more, with yt-dlp's full debug output switched on.")
+
+    def failure(highlight: Mapping[str, Any], error: Exception) -> dict[str, Any]:
+        return {
+            "clip_index": highlight["_highlight_index"],
+            "title": highlight.get("title", "Untitled"),
+            "error": str(error),
+        }
+
+    total = len(highlights)
+    first_pending = next((h for h in highlights if _rendered_master(session_dir, h) is None), None)
+    results: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    for k, h in enumerate(highlights, 1):
+        master = _rendered_master(session_dir, h)
+        if master:  # finished before the failure
+            results.append(
+                {"clip_index": h["_highlight_index"], "output_path": str(master), "title": h.get("title", "")}
+            )
+            continue
+        is_retry = h is first_pending
+        if is_retry and not environment_error:
+            failed.append(failure(h, stopped))  # it failed for its own reasons; running it again would fail the same way
+            continue
+        try:
+            with _ytdlp_verbose(is_retry):
+                results.extend(render([h], _numbered(_log, k, total))["results"])
+        except Exception as exc:
+            _log(f"Clip {k}/{total} failed: {str(exc)[:300]}")
+            failed.append(failure(h, exc))
+    return {"results": results, "failed": failed}
+
+
+@contextlib.contextmanager
+def _ytdlp_verbose(enabled: bool):
+    """Switch on yt-dlp's full debug output (and error tracebacks) for the duration of the block."""
+    previous = os.environ.get("CLIPPER_YTDLP_VERBOSE")
+    if enabled:
+        os.environ["CLIPPER_YTDLP_VERBOSE"] = "1"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("CLIPPER_YTDLP_VERBOSE", None)
+        else:
+            os.environ["CLIPPER_YTDLP_VERBOSE"] = previous
 
 
 def resolve_niche(cli_value: str | None, env: Mapping[str, str] | None = None) -> str | None:
@@ -540,14 +652,14 @@ def _process_options(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _cmd_process(args: argparse.Namespace) -> int:
-    _process(args.session_dir, pick=args.pick, top=args.top, **_process_options(args))
-    return 0
+    result = _process(args.session_dir, pick=args.pick, top=args.top, **_process_options(args))
+    return 1 if result["failed"] else 0
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
     session = _find(args)
-    _process(session["session_dir"], pick=None, top=args.top, **_process_options(args))
-    return 0
+    result = _process(session["session_dir"], pick=None, top=args.top, **_process_options(args))
+    return 1 if result["failed"] else 0
 
 
 def _cmd_social(args: argparse.Namespace) -> int:
