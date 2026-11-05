@@ -14,6 +14,13 @@ from .prompts import (
 from .srt_parser import parse_timestamp
 
 LogFn = Callable[[str], None]
+# (start, end) in seconds -> a longer (start, end) that contains it, or None if it cannot be widened
+FitFn = Callable[[float, float], tuple[float, float] | None]
+
+# Upstream's length rule for a clip. It was written as literals in the validation below;
+# CLIPPER names them so the code that widens short picks uses the very same numbers.
+MIN_CLIP_SECONDS = 58
+MAX_CLIP_SECONDS = 120
 
 # Upper bound on the free-text direction we forward to the model. The UI caps
 # input at 1000 chars; this is the backend guard for CLI/older callers.
@@ -123,11 +130,15 @@ def find_highlights(
     user_direction: str | None = None,
     output_language: str | None = None,
     log: LogFn | None = None,
+    fit_length: FitFn | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Call the AI model and return (highlights, token_usage).
 
     Each highlight has: start_time, end_time, title, description,
     virality_score, hook_text, duration_seconds.
+
+    ``fit_length`` is a CLIPPER addition: when given, picks shorter than 58 s are widened with
+    the surrounding conversation instead of being thrown away (see ``_widen_short_highlights``).
     """
     log = log or debug_log
     system_prompt = system_prompt or DEFAULT_HIGHLIGHT_PROMPT
@@ -231,9 +242,9 @@ def find_highlights(
         result = re.sub(r"```\n?", "", result)
 
     raw_highlights = parse_highlights_json(result, log)
-    valid = _validate_highlights(
-        raw_highlights, num_clips, log, parse_requested_ranges(user_direction)
-    )
+    requested_ranges = parse_requested_ranges(user_direction)
+    raw_highlights = _widen_short_highlights(raw_highlights, fit_length, requested_ranges, log)
+    valid = _validate_highlights(raw_highlights, num_clips, log, requested_ranges)
     return valid, token_usage
 
 
@@ -295,6 +306,56 @@ def parse_highlights_json(raw: str, log: LogFn) -> list[dict[str, Any]]:
     )
 
 
+def _timestamp(seconds: float) -> str:
+    """Seconds -> the ``HH:MM:SS,mmm`` form the model is asked for (and ``parse_timestamp`` reads)."""
+    total_ms = int(round(max(0.0, seconds) * 1000))
+    hours, rest = divmod(total_ms, 3_600_000)
+    minutes, rest = divmod(rest, 60_000)
+    secs, millis = divmod(rest, 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+
+def _widen_short_highlights(
+    highlights: list[dict[str, Any]],
+    fit_length: FitFn | None,
+    requested_ranges: list[tuple[float, float]],
+    log: LogFn,
+) -> list[dict[str, Any]]:
+    """CLIPPER addition: keep the model's good moments that are too short.
+
+    The prompt tells the model every clip must run 60-120 s, but smaller models return the
+    moment itself (10-40 s) anyway. On a real 53-minute episode every one of 21 picks was
+    between 10 and 37 s, the 58 s rule discarded them all, and the run ended with "No valid
+    highlights". Here each short pick is widened with the conversation around it instead,
+    which is what the prompt asks the model to do. Ranges the user spelled out in their
+    direction are left alone, and picks that cannot be widened fall through to the usual check.
+    """
+    if fit_length is None:
+        return highlights
+    for h in highlights:
+        try:
+            start = parse_timestamp(h["start_time"])
+            end = parse_timestamp(h["end_time"])
+        except (KeyError, ValueError, IndexError, TypeError, AttributeError):
+            continue  # _validate_highlights reports the bad timestamps
+        duration = end - start
+        if duration <= 0 or duration >= MIN_CLIP_SECONDS:
+            continue
+        if _matches_requested_range(start, end, requested_ranges):
+            continue
+        fitted = fit_length(start, end)
+        if not fitted:
+            continue
+        new_start, new_end = fitted
+        h["model_start_time"], h["model_end_time"] = h["start_time"], h["end_time"]
+        h["start_time"], h["end_time"] = _timestamp(new_start), _timestamp(new_end)
+        log(
+            f"Widened {h.get('title', 'Untitled')} from {duration:.0f}s to "
+            f"{new_end - new_start:.0f}s with the conversation around it"
+        )
+    return highlights
+
+
 def _validate_highlights(
     highlights: list[dict[str, Any]],
     num_clips: int,
@@ -310,7 +371,9 @@ def _validate_highlights(
 
         try:
             duration = parse_timestamp(h["end_time"]) - parse_timestamp(h["start_time"])
-        except (KeyError, ValueError, IndexError):
+        except (KeyError, ValueError, IndexError, TypeError, AttributeError):
+            # TypeError/AttributeError added by CLIPPER: a model that writes a time as a number
+            # (12 instead of "00:00:12,000") used to crash the whole run instead of skipping the pick.
             log(f"Skipping highlight with invalid timestamps: {h.get('title', 'Unknown')}")
             continue
 
@@ -326,12 +389,13 @@ def _validate_highlights(
             parse_timestamp(h["start_time"]), parse_timestamp(h["end_time"]), requested_ranges
         )
 
-        if 58 <= duration <= 120 or exact:
+        in_range = MIN_CLIP_SECONDS <= duration <= MAX_CLIP_SECONDS
+        if in_range or exact:
             valid.append(h)
-            note = " - exact range from your direction" if exact and not 58 <= duration <= 120 else ""
+            note = " - exact range from your direction" if exact and not in_range else ""
             log(f"OK {title} ({duration:.0f}s) [score {h['virality_score']}/10]{note}")
         else:
-            log(f"Skip {title} ({duration:.0f}s) - outside 58-120s")
+            log(f"Skip {title} ({duration:.0f}s) - outside {MIN_CLIP_SECONDS}-{MAX_CLIP_SECONDS}s")
 
         if len(valid) >= num_clips:
             break

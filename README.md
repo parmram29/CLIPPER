@@ -107,6 +107,8 @@ Every pick gets a 1 to 10 score from a fixed rubric (hook, intensity, surprise, 
 
 Clips come out around one to two minutes long. The original project only keeps picks of 58 to 120 seconds, and a few seconds of padding get added around each.
 
+The AI is told to return 60 to 120 seconds, but smaller models often hand back just the moment itself, 10 to 40 seconds. On the first real episode it was tried on, all 21 picks were that short, and the run ended with "No valid highlights found". So CLIPPER now widens a short pick with the conversation around it, to roughly 70 to 80 seconds: about a third of the added time goes before the moment (the set-up) and the rest after it (the fallout), and both ends snap to the edge of a subtitle line so no sentence is cut in half. The log says `Widened ...` for each one, and the AI's original times are kept in the session data as `model_start_time` and `model_end_time`. A time range you ask for yourself with `--direction` is never widened, and a pick that is too long is still skipped.
+
 ## Long videos and streams
 
 A video longer than about 37 minutes isn't sent to the model in one piece. CLIPPER splits the transcript into overlapping 30-minute windows (`--window-minutes` and `--overlap-minutes` change that), asks for candidates in each window, and drops duplicates of the same moment. Then one last call scores all the survivors together, so a 7 from a quiet stretch means the same thing as a 7 from a busy one. `--no-rerank` skips that last call. Shorter videos go through in a single call, like the original.
@@ -202,7 +204,7 @@ The work is split like this:
 | Part | Files | Where it came from |
 |---|---|---|
 | Subtitles, word timings, downloading a section | `subtitle_*.py`, `json3_parser.py`, `video_processor.py` | yt-short-clipper (small edit) |
-| Picking highlights with the AI | `highlight_finder.py`, `prompts.py` | yt-short-clipper (one bug fixed) |
+| Picking highlights with the AI | `highlight_finder.py`, `prompts.py` | yt-short-clipper (one bug fixed, short picks widened) |
 | Vertical crop (face tracking or centered), captions, hook text, GPU encoder detection | `portrait.py`, `caption_generator.py`, `hook_generator.py`, `gpu.py` | yt-short-clipper (face tracking made optional) |
 | Small helpers: paths, constants, cookie check, subtitle parsing, watermark | `helpers.py`, `constants.py`, `cookies.py`, `srt_parser.py`, `watermark.py` | yt-short-clipper (comments only) |
 | Session flow and rendering | `session.py`, `clip_processor.py` | yt-short-clipper (long-video windows plugged in) |
