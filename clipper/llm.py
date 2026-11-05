@@ -110,12 +110,16 @@ def chat_with_search(
     temperature: float = 0.2,
     max_tokens: int = 1500,
     timeout: float = 180.0,
+    info: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, int], list[dict[str, Any]]]:
     """A chat call with the provider's web search switched on.
 
     Returns ``(text, usage, sources)``. ``sources`` is empty when the provider did not say
     which pages it used, which the caller must treat as "cannot verify", not as "none".
     Raises SearchUnavailable if the endpoint rejects every form of the request.
+
+    If ``info`` is given it is filled with which form of the request was accepted
+    (``info["request"]``), for diagnostics.
     """
     from openai import OpenAI
 
@@ -141,6 +145,8 @@ def chat_with_search(
     for extra in _SEARCH_ATTEMPTS:
         try:
             response = client.chat.completions.create(**base, extra_body=extra)
+            if info is not None:
+                info["request"] = "enable_search + options" if "search_options" in extra else "enable_search only"
             break
         except Exception as exc:  # noqa: BLE001 - try the plainer request before giving up
             last_error = exc

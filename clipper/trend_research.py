@@ -78,6 +78,12 @@ class Report:
     region: str | None = None
     platform: str = "TikTok"
     model: str = ""
+    # What happened, so an empty result can be explained instead of guessed at:
+    proposed: int = 0  # items the model put forward, before any checking
+    cited: list[str] = field(default_factory=list)  # a few of the pages the model said it used
+    returned: list[str] = field(default_factory=list)  # a few of the pages the search returned
+    reply_preview: str = ""  # the start of the model's reply
+    request: str = ""  # which form of the search request the endpoint accepted
 
     def is_empty(self) -> bool:
         return not (self.hashtags or self.formats or self.topics)
@@ -186,7 +192,8 @@ def research(
     """One web-search call, checked and cleaned. Raises SearchUnavailable or ResearchFailed."""
     log = log or (lambda m: None)
     prompt = build_prompt(niche=niche, region=region, platform=platform, today=today or date.today())
-    text, _usage, sources = llm.chat_with_search(ai, prompt)
+    request_info: dict[str, Any] = {}
+    text, _usage, sources = llm.chat_with_search(ai, prompt, info=request_info)
     try:
         data = llm.extract_json(text)
     except ValueError as exc:
@@ -197,6 +204,18 @@ def research(
     hashtags, formats, topics, urls, checkable, dropped = parse_reply(data, sources)
     if dropped:
         log(f"Dropped {dropped} item(s) whose cited page was not among the {len(sources)} sources returned")
+
+    proposed_items = [
+        pair
+        for key, names in (
+            ("hashtags", ("tag", "hashtag", "text")),
+            ("formats", ("text", "format", "topic", "title")),
+            ("topics", ("text", "format", "topic", "title")),
+        )
+        for pair in _pairs(data.get(key), names)
+    ]
+    cited = list(dict.fromkeys(source for _text, source in proposed_items if source))
+    returned = list(dict.fromkeys(str(s["url"]) for s in sources if s.get("url")))
     return Report(
         hashtags=hashtags,
         formats=formats,
@@ -210,7 +229,48 @@ def research(
         region=(region or "").strip() or None,
         platform=platform,
         model=str(ai.get("model", "")),
+        proposed=len(proposed_items),
+        cited=cited[:5],
+        returned=returned[:5],
+        reply_preview=" ".join(text.split())[:300],
+        request=request_info.get("request", ""),
     )
+
+
+def _hosts(urls: list[str]) -> set[str]:
+    return {norm_url(u).split("/", 1)[0] for u in urls if norm_url(u)}
+
+
+def explain_empty(report: Report) -> list[str]:
+    """Say why a search produced nothing usable, and what to try, from what actually happened."""
+    lines = [
+        f"Model: {report.model or '?'}; request accepted as: {report.request or '?'}.",
+        f"Sources returned by the search: {report.n_sources}. Items the model proposed: {report.proposed} "
+        f"(dropped as unverifiable: {report.dropped}).",
+    ]
+    if report.n_sources == 0 and report.proposed == 0:
+        lines.append(
+            "Likely cause: web search did not run for this model. The API returned no sources and the "
+            "model, told never to answer from memory, reported nothing. Try a different model: "
+            "CLIPPER_SEARCH_MODEL=qwen-plus (or another search-capable Qwen model), then run this again."
+        )
+    elif report.n_sources > 0 and report.proposed == 0:
+        lines.append("The search returned pages, but the model found no trends in them.")
+        lines += [f"   returned: {u}" for u in report.returned]
+    elif report.n_sources > 0 and report.dropped >= report.proposed > 0:
+        lines.append("Every item the model proposed cited a page that was not among the returned sources.")
+        lines += [f"   cited:    {u}" for u in report.cited]
+        lines += [f"   returned: {u}" for u in report.returned]
+        if _hosts(report.cited) & _hosts(report.returned):
+            lines.append(
+                "Some cited pages are on sites the search did return, just at different addresses: the "
+                "match may be too strict. Send me this output."
+            )
+    else:
+        lines.append("What the model proposed could not be used after cleaning.")
+    if report.reply_preview:
+        lines.append(f"The model's reply began: {report.reply_preview}")
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +371,9 @@ def auto_trends(
         if not report.is_empty():
             save_cache(path, report)
             return to_trends(report, now=current)
-        log("The search found no usable current trends (nothing it cited could be checked).")
+        log("The search found no usable current trends.")
+        for line in explain_empty(report):
+            log(f"   {line}")
 
     if cached:
         log("Using the older cached trends instead.")
