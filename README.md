@@ -170,7 +170,7 @@ Known gaps:
 
 Run `clipper doctor` first. Most problems show up there.
 
-**`clipper: command not found`**: activate the environment with `source .venv/bin/activate`.
+**`clipper: command not found`**: activate the environment with `source .venv/bin/activate`. If you moved or renamed the project folder (dragging it to another folder in VS Code counts), that won't be enough: the environment remembers the folder it was built in, so its launchers and `activate` script still point at the old location. Open a terminal inside the project folder and rebuild it with `[ -f setup.sh ] && rm -rf .venv && bash setup.sh`. Your `.env`, clips and sessions aren't touched, because only the `.venv` folder is removed. Until then, `.venv/bin/python -m clipper ...` run from inside the project folder still works.
 
 **`No subtitle available`**: the video has no captions, not even auto-generated ones. Try another video.
 
