@@ -127,6 +127,9 @@ def native_search_url(base_url: str) -> str:
     from urllib.parse import urlparse
 
     parsed = urlparse(base_url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        # urllib would also open file:// and ftp:// addresses, so only web addresses get through
+        raise SearchUnavailable(f"CLIPPER_BASE_URL must be an http:// or https:// address, got {base_url!r}")
     return f"{parsed.scheme}://{parsed.netloc}{NATIVE_PATH}"
 
 
@@ -179,7 +182,7 @@ def chat_with_search_native(
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310 (scheme checked in native_search_url)
                 data = json.loads(response.read().decode("utf-8"))
             if info is not None:
                 info["request"] = f"native API: {label}"

@@ -366,7 +366,10 @@ def cache_path(
     niche: str | None, region: str | None, platform: str = "TikTok", cache_dir: str | Path | None = None
 ) -> Path:
     base = Path(cache_dir or os.environ.get("CLIPPER_CACHE_DIR") or Path.home() / ".cache" / "clipper")
-    key = hashlib.sha1(f"{platform}|{region or ''}|{niche or ''}".lower().encode()).hexdigest()[:12]
+    # Only a short file name, not a security measure; usedforsecurity=False says so (and keeps SHA-1
+    # usable on systems that block it for security purposes). Changing the hash would orphan old caches.
+    text = f"{platform}|{region or ''}|{niche or ''}".lower().encode()
+    key = hashlib.sha1(text, usedforsecurity=False).hexdigest()[:12]
     return base / f"trends-{key}.json"
 
 

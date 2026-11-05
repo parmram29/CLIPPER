@@ -2,9 +2,20 @@
 .env
 .env.*
 !.env.example
-# YouTube auth cookies: grants access to the account they were exported from
+# YouTube auth cookies: grants access to the account they were exported from.
+# Covers the usual export names (www.youtube.com_cookies.txt) and the JSON/SQLite formats.
 cookies.txt
 *cookies*.txt
+*cookies*.json
+*cookies*.sqlite
+*.cookies
+# Private keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
 
 # ---- Generated output ----
 out/

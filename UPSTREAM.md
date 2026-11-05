@@ -39,7 +39,7 @@ this repo, as the license requires.
 - `clipper/review.py`, `clipper/export.py`, `clipper/evaluation.py`: review sheet, export folder, and
   agreement between the model's scores and the user's ratings
 - `clipper/llm.py`: a small chat helper for the calls above
-- `pyproject.toml`, `setup.sh`, `.env.example`, `tests/`
+- `pyproject.toml`, `requirements.txt` (pinned versions for dependency scanners), `setup.sh`, `.env.example`, `tests/`
 
 ## Modified upstream code
 
@@ -56,6 +56,8 @@ this repo, as the license requires.
   model saw the literal text `{output_language}` whenever a direction was used. They are now filled in before
   insertion.
 - `clipper/constants.py`: one docstring now names the new package.
+- `clipper/helpers.py`: a `# nosec B310` comment on the one-time face-model download, which uses a
+  fixed https URL, so the security scanner `bandit` does not flag it. No behaviour change.
 - The package was renamed from `yt_short_clipper_core` to `clipper`. All upstream
   imports inside the core are relative, so no other code changed.
 

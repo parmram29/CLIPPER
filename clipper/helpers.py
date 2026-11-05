@@ -234,6 +234,6 @@ def get_face_landmarker_model_path() -> str:
         "face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
     )
     debug_log(f"Downloading face_landmarker model from {url}")
-    urllib.request.urlretrieve(url, str(model_path))
+    urllib.request.urlretrieve(url, str(model_path))  # nosec B310 (fixed https URL above, never user input)
     debug_log(f"Model saved to {model_path}")
     return str(model_path)

@@ -4,21 +4,25 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-command -v python3 >/dev/null || { echo "python3 not found (need 3.10+)"; exit 1; }
-python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \
-  || { echo "Python 3.10+ required, found $(python3 --version)"; exit 1; }
+command -v python3 >/dev/null || { echo "python3 not found (need 3.11+)"; exit 1; }
+python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
+  || { echo "Python 3.11+ required, found $(python3 --version)"; exit 1; }
 
 echo "Python: $(python3 --version) on $(python3 -c 'import platform; print(platform.system(), platform.machine())')"
 
+# --only-binary=:all: means nothing is ever compiled from source. Building a package runs that
+# package's own install script (a supply-chain risk), and OpenCV in particular would take hours
+# to build on an older Intel Mac: without this flag pip picks its newest release even when that
+# release has no prebuilt file for the Mac, instead of the newest one that does.
 echo "Creating virtualenv and installing CLIPPER..."
 [ -d .venv ] || python3 -m venv .venv
 ./.venv/bin/python -m pip install --quiet --upgrade pip setuptools wheel
-./.venv/bin/python -m pip install --quiet -e ".[dev]"
+./.venv/bin/python -m pip install --quiet --only-binary=:all: -e ".[dev]"
 
 # Face tracking is optional: MediaPipe has no build for every Python/CPU (for example,
 # Intel Macs on Python 3.13+). Without it CLIPPER still works with --reframe centered.
 echo "Installing optional face tracking (MediaPipe)..."
-if ./.venv/bin/python -m pip install --quiet -e ".[face]" 2>/dev/null; then
+if ./.venv/bin/python -m pip install --quiet --only-binary=:all: -e ".[face]" 2>/dev/null; then
   echo "  face tracking installed"
 else
   echo "  MediaPipe is not available for this Python/CPU, so face tracking is off."

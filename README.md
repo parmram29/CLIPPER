@@ -27,7 +27,7 @@ The video needs captions on YouTube. Auto-generated ones are fine, but there's n
 
 ## Quick start
 
-You need Python 3.10 or newer, and `ffmpeg` (with libass) on your PATH. On a Mac that's `brew install ffmpeg`.
+You need Python 3.11 or newer, and `ffmpeg` (with libass) on your PATH. On a Mac that's `brew install ffmpeg`.
 
 ```bash
 git clone https://github.com/parmram29/CLIPPER
@@ -36,7 +36,7 @@ bash setup.sh
 source .venv/bin/activate
 ```
 
-`setup.sh` makes a virtual environment, installs everything, creates a `.env` file for you to fill in, and ends with a health check. Face tracking is optional, and the script skips it with a short note if your machine can't install it (more on that under [Troubleshooting](#troubleshooting)).
+`setup.sh` makes a virtual environment, installs everything (prebuilt packages only, nothing is compiled), creates a `.env` file for you to fill in, and ends with a health check. Face tracking is optional, and the script skips it with a short note if your machine can't install it (more on that under [Troubleshooting](#troubleshooting)).
 
 ### Fill in `.env`
 
@@ -184,6 +184,15 @@ Run `clipper doctor` first. Most problems show up there.
 
 **Trends come back empty** (only if you turned them on): run `clipper trends --diagnose`. It sends each web-search request form on its own, shows whether Alibaba accepted or refused it (with the reason), lists the pages the search found, and prints what the model says when it isn't boxed into a strict format. If the pages are off-topic or in another language, the search engine just isn't finding what you need. Captions work without trends, so leaving them off is a fine answer.
 
+## Keeping your accounts safe
+
+This repo is public, so it's set up so that nothing private can end up in it.
+
+- **Your key and cookies stay on your computer.** `.env` and cookie files are git-ignored, including the usual names (`cookies.txt`, `www.youtube.com_cookies.txt`, JSON exports) and private keys. `tests/test_repo_hygiene.py` fails if that stops being true, or if any file that isn't git-ignored contains something shaped like an API key, a private key or a cookie line.
+- **Treat the cookies file like a password.** Whoever has it can use your YouTube login. Don't commit it, email it or paste it into a chat. If you've shared it anywhere, signing out of YouTube everywhere (or changing your Google password) makes it useless.
+- **Where your data goes.** `yt-dlp` talks to YouTube, using your cookies. The transcript of each video goes to the AI service you set in `.env` (Alibaba by default). If MediaPipe is installed, its face model is downloaded once from Google. CLIPPER itself sends nothing else anywhere and has no telemetry.
+- **Dependencies are checked.** `pyproject.toml` only allows versions of its dependencies that had no known security advisory when they were last checked (the date is in the file), and `requirements.txt` pins the exact versions the tests pass on. To check your own install, run `pip install pip-audit` and then `pip-audit`. `setup.sh` installs prebuilt packages only, so no third-party package gets compiled or runs its own build script on your machine.
+
 ## Credits and license
 
 **CLIPPER is built on top of [yt-short-clipper](https://github.com/jipraks/yt-short-clipper) by Aji Prakoso (jipraks), MIT licensed.** Thank you to them for releasing it openly. This project wouldn't exist without it.
@@ -195,14 +204,14 @@ The work is split like this:
 | Subtitles, word timings, downloading a section | `subtitle_*.py`, `json3_parser.py`, `video_processor.py` | yt-short-clipper (small edit) |
 | Picking highlights with the AI | `highlight_finder.py`, `prompts.py` | yt-short-clipper (one bug fixed) |
 | Vertical crop (face tracking or centered), captions, hook text, GPU encoder detection | `portrait.py`, `caption_generator.py`, `hook_generator.py`, `gpu.py` | yt-short-clipper (face tracking made optional) |
-| Small helpers: paths, constants, cookie check, subtitle parsing, watermark | `helpers.py`, `constants.py`, `cookies.py`, `srt_parser.py`, `watermark.py` | yt-short-clipper (one comment changed) |
+| Small helpers: paths, constants, cookie check, subtitle parsing, watermark | `helpers.py`, `constants.py`, `cookies.py`, `srt_parser.py`, `watermark.py` | yt-short-clipper (comments only) |
 | Session flow and rendering | `session.py`, `clip_processor.py` | yt-short-clipper (long-video windows plugged in) |
 | Command line and settings | `cli.py`, `config.py` | added here |
 | Long-video windows and re-scoring | `windowing.py` | added here |
 | The `viral` prompt and profiles | `viral_prompt.py`, `profiles.py` | added here |
 | Titles, captions, hashtags, trends | `social.py`, `trends.py`, `trend_research.py`, `llm.py` | added here |
 | Review sheet, export, rating check | `review.py`, `export.py`, `evaluation.py` | added here |
-| Setup script, config, tests | `setup.sh`, `pyproject.toml`, `tests/` | added here |
+| Setup script, config, pinned dependencies, tests | `setup.sh`, `pyproject.toml`, `requirements.txt`, `tests/` | added here |
 
 What was dropped from the original: its desktop app, the in-app wallet, the Repliz uploader, and the Windows packaging. [UPSTREAM.md](UPSTREAM.md) has the full list of what was kept, dropped and changed, including every edit made to the original code.
 

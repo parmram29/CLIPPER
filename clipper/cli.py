@@ -728,10 +728,10 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     def fail(msg: str) -> None:
         rows.append(("FAIL", msg))
 
-    if sys.version_info >= (3, 10):
+    if sys.version_info >= (3, 11):
         ok(f"Python {sys.version.split()[0]}")
     else:
-        fail(f"Python {sys.version.split()[0]}: 3.10+ required")
+        fail(f"Python {sys.version.split()[0]}: 3.11+ required")
 
     from .helpers import get_deno_path, get_ffmpeg_path
 
