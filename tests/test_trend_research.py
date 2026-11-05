@@ -690,3 +690,16 @@ def test_the_cli_uses_the_native_api_when_asked(monkeypatch, fake_llm, tmp_path,
     assert cli.main(["trends", "--refresh"]) == 0
     assert fake_llm.requests[0]["path"].endswith("/generation")
     assert "sources returned by the search: 2" in capsys.readouterr().out
+
+
+def test_the_free_tier_only_error_code_gets_specific_instructions():
+    error = RuntimeError('native web search request failed: HTTP 403: {"code":"AllocationQuota.FreeTierOnly","message":"The free quota has been exhausted."}')
+    hint = tr._hint_for(error)
+    assert "AllocationQuota.FreeTierOnly" in hint and "'Free quota only' switch is on" in hint
+    assert "Actions column" in hint and "about 30 minutes" in hint
+    assert "identity-verified" in hint and "check the price first" in hint
+    assert "CLIPPER_SEARCH_MODEL" in hint
+
+
+def test_a_quota_message_without_the_code_still_gets_the_general_quota_hint():
+    assert "Alibaba's refusal, not CLIPPER's" in tr._hint_for(RuntimeError(QUOTA))
