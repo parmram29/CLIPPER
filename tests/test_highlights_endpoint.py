@@ -21,7 +21,7 @@ def _call(server, **kwargs):
         transcript=TRANSCRIPT,
         video_info={"title": "Test Show", "channel": "Chan", "description": "desc"},
         num_clips=kwargs.pop("num_clips", 3),
-        api_key="sk-test-key",
+        api_key="sk-test-key",  # pragma: allowlist secret (a made-up value)
         base_url=server.base_url,
         model="qwen-plus",
         log=lambda m: None,

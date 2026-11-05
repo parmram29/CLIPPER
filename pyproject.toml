@@ -7,23 +7,31 @@ name = "clipper"
 version = "0.1.0"
 description = "Turn long videos into vertical 9:16 short-form clips (headless CLI)"
 readme = "README.md"
-requires-python = ">=3.10"
+# 3.11 because Pillow 13 needs it, and every Pillow release from 10.0.0 to 12.3.0 has known security advisories.
+requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
+# Each minimum is the oldest release that has no known security advisory at or above it
+# (checked release by release against PyPI's advisory database on 2026-11-05).
+# tests/test_repo_hygiene.py stops them being lowered by accident. pip still installs the
+# newest release your Python supports.
 dependencies = [
     "openai>=1.0.0",
     "yt-dlp>=2026.8.19",
     # The same OpenCV distribution mediapipe requires, so installing the `face` extra
     # never puts two packages that both provide `cv2` side by side (they overwrite
-    # each other's files).
-    "opencv-contrib-python>=4.8.0",
+    # each other's files). Before 4.8.1.78 the wheels bundle a libwebp with CVE-2023-4863.
+    "opencv-contrib-python>=4.8.1.78",
     "numpy>=1.24.0",
-    "Pillow>=10.0.0",
-    "python-dotenv>=1.0.0",
+    # Every release from 10.0.0 to 12.3.0 has image-parsing advisories (55 on 12.3.0 alone).
+    "Pillow>=13.0.0",
+    # 1.2.2 fixes a symlink bug in set_key()/unset_key() (CVE-2026-28684). CLIPPER only reads .env.
+    "python-dotenv>=1.2.2",
     # CA bundle for HTTPS. Python from python.org on macOS ships without one, and
     # clipper.cli.ensure_ca_certificates() falls back to this. Declared directly because
-    # it is not guaranteed to arrive as a dependency of something else.
-    "certifi",
+    # it is not guaranteed to arrive as a dependency of something else. Releases before
+    # 2026.10.18 still trust a root CA whose intermediates have compromised keys.
+    "certifi>=2026.10.18",
 ]
 
 [project.optional-dependencies]
