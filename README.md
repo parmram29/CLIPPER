@@ -98,20 +98,34 @@ so nothing here uses numbers. A caption cannot rescue a weak clip: it sets up th
 search for, and invites a reply. The limits above are CLIPPER's choices, not platform rules. Sources also disagree
 on TikTok's caption length limit, and say only the first 80-125 characters show before "more".
 
-**Trends.** There is no official feed of TikTok trends. The
-[Creative Center](https://ads.tiktok.com/help/article/how-to-use-trends) shows trending hashtags, videos and creators by region and industry,
-but only as a dashboard. So you paste in what is trending, and the model is told to use *only* that, since its own idea
-of "trending" is months out of date:
+**Trends are researched automatically.** There is no official feed of TikTok trends: the
+[Creative Center](https://ads.tiktok.com/help/article/how-to-use-trends) is a dashboard, the Research API is limited to
+non-commercial research (per secondary sources), and scraping TikTok is brittle and may break its terms. And your own feed is
+personalised, so it is a poor sample of what is trending. So CLIPPER asks a model with **web search** switched on (Qwen, through
+your existing key) what is trending on TikTok right now for your niche and region, and feeds the result to the captions.
+Nothing to paste, nothing to refresh by hand: the result is cached and re-researched on its own every 3 days (a CLIPPER default).
 
 ```bash
-clipper trends --init          # creates ./trends.txt with a template and where to look
-clipper trends                 # shows what will be used, how old it is, and which hashtags it offers
-clipper social out/sessions/<session> --niche "reality TV drama" --trends trends.txt
+clipper trends --refresh                          # research now and show what it found and how well it checked out
+clipper social out/sessions/<session> --niche "reality TV drama" --region "United States"
 ```
 
-A trend is only used when it genuinely fits the clip, and `trend_tags_used` records which ones were, so you can compare
-posts later. The file is flagged stale after 14 days (a CLIPPER default: trends decay fast, so refresh it weekly). With no
-trends file the captions use general best practice only and the model is told not to claim anything is trending.
+Set `CLIPPER_NICHE` and `CLIPPER_REGION` in `.env` once and forget them. What you should know about it:
+
+- **It is research from web pages about TikTok, not data from TikTok.** It is only as good as what the search finds.
+- **It is checked, not trusted.** Each item must cite a page, and an item is kept only if that page was among the sources the search
+  returned; anything else (a made-up hashtag with a made-up link) is dropped, and `clipper trends --refresh` tells you how many.
+  If the provider returns no sources at all, nothing can be checked, so the result is labelled **UNVERIFIED** (here and in the captions prompt).
+- **Web text is treated as data.** It is cut to short plain lines before it reaches the captions prompt, since a web page can contain
+  text aimed at an AI.
+- **It may not work on your account.** Web search is a separate feature; I could not read Alibaba's docs from where this was built,
+  so which models support it, what it costs, and the exact reply format are unconfirmed. Run `clipper trends --refresh` once to find out.
+  If search is refused, captions are still written without trends; set `CLIPPER_SEARCH_MODEL` to a search-capable model, or
+  `CLIPPER_AUTO_TRENDS=0` to switch it off.
+- **You can override it.** A file you name (`--trends FILE`) or a filled-in `./trends.txt` (`clipper trends --init`) takes priority.
+
+A trend is only used when it genuinely fits the clip, and `trend_tags_used` records which ones were, so you can compare posts later.
+With no trends at all the captions use general best practice only and the model is told not to claim anything is trending.
 `--niche` (or `CLIPPER_NICHE`) keeps wording and hashtags consistent across an account.
 
 To learn what works for your account, post different angles (tease on one clip, question on the next) and compare

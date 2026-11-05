@@ -90,7 +90,8 @@ def test_the_default_file_is_found_in_the_current_directory(tmp_path, monkeypatc
 
 
 def test_describe_says_what_is_happening(tmp_path):
-    assert "No trends file" in trends.describe(None, "x.txt") and "clipper trends --init" in trends.describe(None)
+    nothing = trends.describe(None, "x.txt")
+    assert "No trends available" in nothing and "clipper trends --refresh" in nothing and "clipper trends --init" in nothing
     fresh = trends.describe(trends.load_trends(_write(tmp_path, "#a #b", age_days=0.2)))
     assert "updated today" in fresh and "2 hashtag(s)" in fresh and "STALE" not in fresh
     stale = trends.describe(trends.load_trends(_write(tmp_path, "#a", age_days=40, name="old.txt")))

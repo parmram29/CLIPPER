@@ -5,7 +5,7 @@
     clipper process SESSION_DIR [--pick 1,3-4 | --top N] [--reframe ...] [--export] ...
     clipper run URL [--clips N] [--top N] ...
     clipper social SESSION_DIR      write a title, 3 caption angles and hashtags for each clip
-    clipper trends [--init]         the file of current trends the captions draw on
+    clipper trends [--refresh]      the current trends the captions draw on (researched automatically)
     clipper review SESSION_DIR      write a review sheet (CSV) to rate the picks
     clipper export SESSION_DIR      gather finished clips into one folder (for AirDrop)
     clipper eval review.csv         compare the model's scores with your ratings
@@ -302,12 +302,21 @@ def _process(
     open_after: bool = False,
     niche: str | None = None,
     trends_file: str | None = None,
+    region: str | None = None,
+    auto_trends: bool = True,
+    refresh_trends: bool = False,
 ) -> dict[str, Any]:
     session = load_session(session_dir)
     chosen = select_highlights(session, pick=pick, top=top)
     # Read these before rendering, so a mistyped --trends path fails now, not after the render.
     niche_text = resolve_niche(niche)
-    trends = load_trends_for_run(trends_file) if social else None
+    trends = (
+        load_trends_for_run(
+            trends_file, niche=niche_text, region=region, auto=auto_trends, refresh=refresh_trends
+        )
+        if social
+        else None
+    )
     requested_reframe = reframe
     reframe = resolve_reframe(requested_reframe)
     if requested_reframe == "auto" and reframe == "centered":
@@ -344,20 +353,70 @@ def resolve_niche(cli_value: str | None, env: Mapping[str, str] | None = None) -
     return (cli_value or env.get("CLIPPER_NICHE") or "").strip() or None
 
 
-def load_trends_for_run(cli_value: str | None, env: Mapping[str, str] | None = None):
-    """Load the trends file (explicit path, $CLIPPER_TRENDS, or ./trends.txt) and say what was found.
+def resolve_region(cli_value: str | None, env: Mapping[str, str] | None = None) -> str | None:
+    env = os.environ if env is None else env
+    return (cli_value or env.get("CLIPPER_REGION") or "").strip() or None
 
-    A path you asked for that does not exist is an error; a missing default file is just a note.
+
+def auto_trends_enabled(env: Mapping[str, str] | None = None) -> bool:
+    env = os.environ if env is None else env
+    return env.get("CLIPPER_AUTO_TRENDS", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def search_ai_config(env: Mapping[str, str] | None = None) -> dict[str, str] | None:
+    """The AI settings for trend research: same key and endpoint, optionally a different model
+    (``CLIPPER_SEARCH_MODEL``) in case the chat model does not support web search."""
+    env = os.environ if env is None else env
+    try:
+        ai = config.load_ai_config(env).as_dict()
+    except config.ConfigError:
+        return None
+    ai["model"] = (env.get("CLIPPER_SEARCH_MODEL") or "").strip() or ai["model"]
+    return ai
+
+
+def load_trends_for_run(
+    cli_value: str | None,
+    env: Mapping[str, str] | None = None,
+    *,
+    niche: str | None = None,
+    region: str | None = None,
+    auto: bool = True,
+    refresh: bool = False,
+):
+    """Work out which trends the captions should use, and say what was found.
+
+    In order: a file you named (``--trends`` / ``$CLIPPER_TRENDS``), then ``./trends.txt`` if you
+    have filled it in, then automatic web research (cached, refreshed every few days). A path
+    you asked for that does not exist is an error; nothing found is just a note, and captions
+    are still written.
     """
+    from . import trend_research
     from . import trends as trends_mod
 
     env = os.environ if env is None else env
     explicit = cli_value or env.get("CLIPPER_TRENDS")
     if explicit and not Path(explicit).is_file():
         raise FileNotFoundError(f"trends file not found: {explicit}")
+
     loaded = trends_mod.load_trends(explicit)
-    _log(trends_mod.describe(loaded, explicit))
-    return loaded
+    if trends_mod.is_unedited_template(loaded):
+        _log(f"{loaded.path} is still the unedited template, so it is being ignored.")
+        loaded = None
+    if loaded:
+        _log(trends_mod.describe(loaded, explicit))
+        return loaded
+
+    if auto and auto_trends_enabled(env):
+        ai = search_ai_config(env)
+        if ai:
+            found = trend_research.auto_trends(
+                ai, niche=niche, region=resolve_region(region, env), force=refresh, log=_log
+            )
+            _log(trends_mod.describe(found))
+            return found
+    _log(trends_mod.describe(None, explicit))
+    return None
 
 
 def _generate_social(
@@ -441,6 +500,9 @@ def _process_options(args: argparse.Namespace) -> dict[str, Any]:
         open_after=args.open,
         niche=args.niche,
         trends_file=args.trends,
+        region=args.region,
+        auto_trends=not args.no_auto_trends,
+        refresh_trends=args.refresh_trends,
     )
 
 
@@ -459,14 +521,21 @@ def _cmd_social(args: argparse.Namespace) -> int:
     session = load_session(args.session_dir)
     chosen = select_highlights(session, pick=args.pick, top=args.top)
     ai = config.load_ai_config().as_dict()
+    niche = resolve_niche(args.niche)
     written = _generate_social(
         args.session_dir,
         session,
         chosen,
         ai=ai,
         force=args.force,
-        niche=resolve_niche(args.niche),
-        trends=load_trends_for_run(args.trends),
+        niche=niche,
+        trends=load_trends_for_run(
+            args.trends,
+            niche=niche,
+            region=args.region,
+            auto=not args.no_auto_trends,
+            refresh=args.refresh_trends,
+        ),
     )
     if written == 0:
         print("Nothing new to write (use --force to regenerate existing captions).")
@@ -483,13 +552,55 @@ def _cmd_trends(args: argparse.Namespace) -> int:
         print("Open it, replace the examples with what is trending right now, and save.")
         print("Where to look: TikTok Creative Center > Trends")
         print("  https://ads.tiktok.com/help/article/how-to-use-trends")
+        print("(You do not need this file: without it, trends are researched automatically.)")
         return 0
-    loaded = trends_mod.load_trends(path)
-    print(trends_mod.describe(loaded, path))
-    if loaded:
-        tags = ", ".join(f"#{t}" for t in loaded.hashtags) or "(none)"
-        print(f"Hashtags it will offer the model: {tags}")
+
+    from . import trend_research
+
+    niche = resolve_niche(args.niche)
+    region = resolve_region(args.region)
+
+    manual = trends_mod.load_trends(path)
+    if trends_mod.is_unedited_template(manual):
+        manual = None
+    if manual:
+        print(trends_mod.describe(manual, path))
+        print(f"Hashtags it will offer the model: {', '.join(f'#{t}' for t in manual.hashtags) or '(none)'}")
+        print("(A trends file you wrote takes priority over automatic research.)")
+        return 0
+
+    cache_file = trend_research.cache_path(niche, region)
+    if args.refresh:
+        ai = search_ai_config()
+        if ai is None:
+            raise config.ConfigError("No API key configured. Set CLIPPER_API_KEY in .env to research trends.")
+        trend_research.auto_trends(ai, niche=niche, region=region, force=True, log=_log)
+    report = trend_research.load_cache(cache_file)
+    if report is None:
+        print(trends_mod.describe(None, path))
+        return 1 if args.refresh else 0
+    print(trends_mod.describe(trend_research.to_trends(report)))
+    _print_report(report)
     return 0
+
+
+def _print_report(report: Any) -> None:
+    print(f"\nResearched with {report.model or 'the configured model'} for: "
+          f"{report.niche or 'general entertainment'}, {report.region or 'worldwide'}")
+    if report.hashtags:
+        print("  hashtags: " + " ".join(f"#{t}" for t in report.hashtags))
+    for label, items in (("formats", report.formats), ("topics", report.topics)):
+        for item in items:
+            print(f"  {label[:-1]}: {item}")
+    if report.n_sources:
+        print(f"  sources returned by the search: {report.n_sources}; items kept: matched to them; "
+              f"dropped as unverifiable: {report.dropped}")
+        for url in report.source_urls[:5]:
+            print(f"    - {url}")
+    else:
+        print("  The search returned NO sources, so nothing could be checked and these items are "
+              "UNVERIFIED. If they look wrong, set CLIPPER_AUTO_TRENDS=0 or write your own with "
+              "`clipper trends --init`.")
 
 
 def _cmd_review(args: argparse.Namespace) -> int:
@@ -712,8 +823,23 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument(
             "--trends",
             metavar="FILE",
-            help="file of what is trending right now (default: $CLIPPER_TRENDS, then ./trends.txt). "
-            "Create one with `clipper trends --init`",
+            help="your own file of what is trending (default: $CLIPPER_TRENDS, then ./trends.txt). "
+            "Without one, trends are researched automatically; see `clipper trends`",
+        )
+        sp.add_argument(
+            "--region",
+            help="where your audience is, e.g. 'United States' or 'UK' (default: $CLIPPER_REGION, "
+            "else worldwide English-language); used when researching trends",
+        )
+        sp.add_argument(
+            "--no-auto-trends",
+            action="store_true",
+            help="do not research trends automatically (also: CLIPPER_AUTO_TRENDS=0)",
+        )
+        sp.add_argument(
+            "--refresh-trends",
+            action="store_true",
+            help="research trends again now instead of using the cached result (cached for 3 days)",
         )
 
     def add_find_args(sp: argparse.ArgumentParser) -> None:
@@ -824,8 +950,13 @@ def build_parser() -> argparse.ArgumentParser:
     trends = sub.add_parser(
         "trends", help="show or create the file of current trends that captions draw on"
     )
-    trends.add_argument("--init", action="store_true", help="create a template trends file")
-    trends.add_argument("--file", metavar="FILE", help="which file (default: $CLIPPER_TRENDS, then ./trends.txt)")
+    trends.add_argument("--init", action="store_true", help="create a template for your own trends file")
+    trends.add_argument(
+        "--refresh", action="store_true", help="research trends now (web search) and show what it found and how well it checked out"
+    )
+    trends.add_argument("--niche", help="what your account is about (default: $CLIPPER_NICHE)")
+    trends.add_argument("--region", help="where your audience is (default: $CLIPPER_REGION)")
+    trends.add_argument("--file", metavar="FILE", help="your own file (default: $CLIPPER_TRENDS, then ./trends.txt)")
     trends.set_defaults(func=_cmd_trends)
 
     review = sub.add_parser("review", help="write a review sheet (CSV) to rate the picks")

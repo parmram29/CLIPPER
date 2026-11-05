@@ -22,6 +22,15 @@ class _Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(error)
             return
+        refused = self.server.reject_keys & set(body)
+        if refused:
+            error = json.dumps({"error": {"message": f"unsupported parameter(s): {sorted(refused)}"}}).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(error)))
+            self.end_headers()
+            self.wfile.write(error)
+            return
         reply = self.server.reply_fn(body) if self.server.reply_fn else self.server.reply
         payload = {
             "id": "chatcmpl-test",
@@ -37,6 +46,7 @@ class _Handler(BaseHTTPRequestHandler):
             ],
             "usage": {"prompt_tokens": 11, "completion_tokens": 22, "total_tokens": 33},
         }
+        payload.update(self.server.extra_response)  # e.g. a provider's `search_info`
         data = json.dumps(payload).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -49,11 +59,17 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_environment(monkeypatch):
-    """No test may read a real .env or use a real API key (which would spend real money)."""
+def _isolate_environment(monkeypatch, tmp_path_factory):
+    """No test may read a real .env, use a real API key (which would spend real money), touch the
+    real trends cache, or run web research unless it asks for it."""
     monkeypatch.setenv("CLIPPER_SKIP_DOTENV", "1")
-    for var in ("CLIPPER_API_KEY", "DASHSCOPE_API_KEY", "CLIPPER_BASE_URL", "CLIPPER_MODEL"):
+    for var in (
+        "CLIPPER_API_KEY", "DASHSCOPE_API_KEY", "CLIPPER_BASE_URL", "CLIPPER_MODEL",
+        "CLIPPER_NICHE", "CLIPPER_TRENDS", "CLIPPER_REGION", "CLIPPER_SEARCH_MODEL",
+    ):
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("CLIPPER_AUTO_TRENDS", "0")  # tests of automatic research switch it on
+    monkeypatch.setenv("CLIPPER_CACHE_DIR", str(tmp_path_factory.mktemp("clipper-cache")))
 
 
 @pytest.fixture
@@ -73,6 +89,8 @@ def fake_llm(monkeypatch):
     server.reply = "[]"
     server.reply_fn = None
     server.reject_response_format = False
+    server.reject_keys = set()  # request fields to refuse with a 400, e.g. {"enable_search"}
+    server.extra_response = {}  # extra top-level fields to add to every reply
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     server.base_url = f"http://127.0.0.1:{server.server_port}/compatible-mode/v1"
