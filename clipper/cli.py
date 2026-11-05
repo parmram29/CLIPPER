@@ -585,6 +585,14 @@ def _cmd_trends(args: argparse.Namespace) -> int:
     niche = resolve_niche(args.niche)
     region = resolve_region(args.region)
 
+    if args.diagnose:
+        ai = search_ai_config()
+        if ai is None:
+            raise config.ConfigError("No API key configured. Set CLIPPER_API_KEY in .env to test web search.")
+        for line in trend_research.diagnose(ai, niche=niche, region=region, api=search_api()):
+            print(line)
+        return 0
+
     manual = trends_mod.load_trends(path)
     if trends_mod.is_unedited_template(manual):
         manual = None
@@ -617,6 +625,10 @@ def _print_report(report: Any) -> None:
     for label, items in (("formats", report.formats), ("topics", report.topics)):
         for item in items:
             print(f"  {label[:-1]}: {item}")
+    if report.refused:
+        print("  request forms refused first (a simpler one was used):")
+        for entry in report.refused:
+            print(f"    - {entry}")
     if report.n_sources:
         print(f"  sources returned by the search: {report.n_sources}; items kept: matched to them; "
               f"dropped as unverifiable: {report.dropped}")
@@ -980,6 +992,12 @@ def build_parser() -> argparse.ArgumentParser:
     trends.add_argument("--init", action="store_true", help="create a template for your own trends file")
     trends.add_argument(
         "--refresh", action="store_true", help="research trends now (web search) and show what it found and how well it checked out"
+    )
+    trends.add_argument(
+        "--diagnose",
+        action="store_true",
+        help="test each web-search request form on its own and show exactly what came back "
+        "(a few small AI calls; writes nothing)",
     )
     trends.add_argument("--niche", help="what your account is about (default: $CLIPPER_NICHE)")
     trends.add_argument("--region", help="where your audience is (default: $CLIPPER_REGION)")
