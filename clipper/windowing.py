@@ -5,7 +5,8 @@ still take that path, unchanged. For long ones:
 
 1. split the transcript into windows (default 30 min, overlapping by 2 min so a moment on
    a boundary is seen whole by at least one window);
-2. ask for candidates in each window;
+2. ask for candidates in each window, and widen any pick that came back shorter than the
+   minimum clip length with the conversation around it (models often return only the moment);
 3. drop duplicates (the same moment found by two windows);
 4. re-score every surviving candidate in ONE call, so a 7 from a dull window and a 7 from
    a lively one are comparable. Without this, each window's scores only make sense inside
@@ -35,6 +36,10 @@ CANDIDATE_FACTOR = 2
 # Two picks are "the same moment" when they overlap by more than this share of the shorter one.
 DUPLICATE_OVERLAP_FRACTION = 0.2
 EXCERPT_CHARS = 600
+# A pick shorter than the minimum clip length is widened to about this long (the prompt asks for 60-90 s).
+TARGET_CLIP_SECONDS = 72
+# Of the seconds added, this share goes before the pick (the set-up) and the rest after it (the fallout).
+LEAD_IN_SHARE = 0.35
 
 _LINE_RE = re.compile(
     r"^\[(\d{2,}:\d{2}:\d{2}[,.]\d{3}) - (\d{2,}:\d{2}:\d{2}[,.]\d{3})\]\s?(.*)$"
@@ -105,6 +110,72 @@ def split_transcript(
             break
         t0 += step
     return windows
+
+
+# ---------------------------------------------------------------------------
+# Picks that are too short
+# ---------------------------------------------------------------------------
+
+
+def fit_to_length(
+    lines: list[Line],
+    start: float,
+    end: float,
+    *,
+    minimum: float = highlight_finder.MIN_CLIP_SECONDS,
+    maximum: float = highlight_finder.MAX_CLIP_SECONDS,
+    target: float = TARGET_CLIP_SECONDS,
+    lead_in_share: float = LEAD_IN_SHARE,
+) -> tuple[float, float] | None:
+    """Widen the pick ``start``-``end`` with the transcript around it, to about ``target`` seconds.
+
+    A third of the added time goes before the pick (the set-up) and the rest after it (the
+    fallout). Whatever would hang over the start or end of the video moves to the other side.
+    Both ends then snap outward to subtitle-line boundaries so no sentence is cut in half, and
+    the original moment always stays inside. Returns None when that cannot be done: no
+    transcript, a pick that lies outside it, a video shorter than ``minimum``, or a pick that is
+    already longer than ``maximum``.
+    """
+    if not lines or end <= start:
+        return None
+    floor = min(line.start for line in lines)
+    ceiling = max(line.end for line in lines)
+    duration = end - start
+    if duration >= minimum:
+        return (start, end) if duration <= maximum else None
+    if ceiling - floor < minimum or start < floor - 1 or end > ceiling + 1:
+        return None
+
+    extra = max(target, minimum) - duration
+    new_start = start - extra * lead_in_share
+    new_end = end + extra * (1 - lead_in_share)
+    if new_start < floor:  # no room before the pick: take it after
+        new_end += floor - new_start
+        new_start = floor
+    if new_end > ceiling:  # no room after it: take it before
+        new_start -= new_end - ceiling
+        new_end = ceiling
+    new_start = max(new_start, floor)
+
+    starts = [line.start for line in lines if line.start <= new_start]
+    ends = [line.end for line in lines if line.end >= new_end]
+    snapped_start = min(max(starts) if starts else floor, start)
+    snapped_end = max(min(ends) if ends else ceiling, end)
+
+    if snapped_end - snapped_start > maximum:  # unusually long subtitle lines: pull the end back
+        fits = [line.end for line in lines if end <= line.end <= snapped_start + maximum]
+        if not fits:
+            return None
+        snapped_end = max(fits)
+    if snapped_end - snapped_start < minimum:
+        return None
+    return snapped_start, snapped_end
+
+
+def length_fitter(transcript: str) -> highlight_finder.FitFn:
+    """A ``fit_length`` for ``highlight_finder.find_highlights`` that uses the whole transcript."""
+    lines = parse_lines(transcript)
+    return lambda start, end: fit_to_length(lines, start, end)
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +334,7 @@ def find_highlights_windowed(
         user_direction=user_direction,
         output_language=output_language,
         log=log,
+        fit_length=length_fitter(transcript),  # built from the whole video, not one window
     )
 
     windows = split_transcript(transcript, window_seconds, overlap_seconds)

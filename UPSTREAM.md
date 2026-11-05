@@ -55,6 +55,12 @@ this repo, as the license requires.
   `{output_language}`, but upstream inserted them after that placeholder had already been replaced, so the
   model saw the literal text `{output_language}` whenever a direction was used. They are now filled in before
   insertion.
+- `clipper/highlight_finder.py` (second change): the 58 and 120 second limits are now the named constants
+  `MIN_CLIP_SECONDS` and `MAX_CLIP_SECONDS`, and `find_highlights()` takes an optional `fit_length` function.
+  When it is given, picks shorter than 58 s are widened with the surrounding transcript before the usual
+  length check instead of being discarded (`windowing.fit_to_length` does the widening). Without it nothing
+  changes. The check for invalid timestamps also catches `TypeError`/`AttributeError`, so a model that writes
+  a time as a number gets that one pick skipped instead of crashing the run.
 - `clipper/constants.py`: one docstring now names the new package.
 - `clipper/helpers.py`: a `# nosec B310` comment on the one-time face-model download, which uses a
   fixed https URL, so the security scanner `bandit` does not flag it. No behaviour change.
