@@ -164,12 +164,12 @@ def chat_with_search_native(
                 info["request"] = "native API: enable_search" + (" + options" if "search_options" in extra else " only")
             break
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace")[:300]
+            detail = exc.read().decode("utf-8", "replace")[:700]
             last_error = RuntimeError(f"HTTP {exc.code}: {detail}")
         except (urllib.error.URLError, OSError, ValueError) as exc:
             last_error = exc
     if data is None:
-        raise SearchUnavailable(f"native web search request failed: {str(last_error)[:300]}") from last_error
+        raise SearchUnavailable(f"native web search request failed: {str(last_error)[:700]}") from last_error
 
     output = data.get("output") or {}
     choices = output.get("choices") or []
@@ -247,7 +247,7 @@ def chat_with_search(
         except Exception as exc:  # noqa: BLE001 - try the plainer request before giving up
             last_error = exc
     if response is None:
-        raise SearchUnavailable(f"web search request failed: {str(last_error)[:300]}") from last_error
+        raise SearchUnavailable(f"web search request failed: {str(last_error)[:700]}") from last_error
 
     if not getattr(response, "choices", None):
         raise SearchUnavailable("the search reply had no choices")

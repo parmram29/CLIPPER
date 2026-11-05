@@ -703,3 +703,20 @@ def test_the_free_tier_only_error_code_gets_specific_instructions():
 
 def test_a_quota_message_without_the_code_still_gets_the_general_quota_hint():
     assert "Alibaba's refusal, not CLIPPER's" in tr._hint_for(RuntimeError(QUOTA))
+
+
+def test_the_error_keeps_alibabas_request_id_which_support_needs(monkeypatch):
+    import io
+    import urllib.error
+
+    body = ('{"code":"AllocationQuota.FreeTierOnly","message":"' + "The free quota has been exhausted. " * 8
+            + '","request_id":"0ccce68f-1111-2222-3333-444455556666"}').encode()
+
+    def refuse(request, timeout=None):
+        raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", {}, io.BytesIO(body))
+
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    with pytest.raises(llm.SearchUnavailable) as caught:
+        llm.chat_with_search({"api_key": "k", "base_url": "https://x.test/compatible-mode/v1", "model": "m"}, "x", api="dashscope")
+    assert "0ccce68f-1111-2222-3333-444455556666" in str(caught.value)  # it used to be cut off before this
