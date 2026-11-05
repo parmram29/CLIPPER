@@ -5,7 +5,7 @@
     clipper process SESSION_DIR [--pick 1,3-4 | --top N] [--reframe ...] [--export] ...
     clipper run URL [--clips N] [--top N] ...
     clipper social SESSION_DIR      write a title, 3 caption angles and hashtags for each clip
-    clipper trends [--refresh]      the current trends the captions draw on (researched automatically)
+    clipper trends [--refresh]      the trend list the captions draw on (web research is experimental, off by default)
     clipper review SESSION_DIR      write a review sheet (CSV) to rate the picks
     clipper export SESSION_DIR      gather finished clips into one folder (for AirDrop)
     clipper eval review.csv         compare the model's scores with your ratings
@@ -359,8 +359,13 @@ def resolve_region(cli_value: str | None, env: Mapping[str, str] | None = None) 
 
 
 def auto_trends_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """Automatic trend research is experimental and OFF unless ``CLIPPER_AUTO_TRENDS`` is switched on.
+
+    On the one account it was tried on, Alibaba's search returned only Chinese-language pages about
+    TikTok in general, so by default nothing is researched and no failed attempts clutter a run.
+    """
     env = os.environ if env is None else env
-    return env.get("CLIPPER_AUTO_TRENDS", "1").strip().lower() not in ("0", "false", "no", "off")
+    return (env.get("CLIPPER_AUTO_TRENDS") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def search_ai_config(env: Mapping[str, str] | None = None) -> dict[str, str] | None:
@@ -427,7 +432,9 @@ def load_trends_for_run(
         _log(trends_mod.describe(loaded, explicit))
         return loaded
 
-    if auto and auto_trends_enabled(env):
+    # Research runs if it is switched on, or if you asked for it right now with --refresh-trends;
+    # --no-auto-trends beats both.
+    if auto and (refresh or auto_trends_enabled(env)):
         ai = search_ai_config(env)
         if ai:
             found = trend_research.auto_trends(
@@ -440,8 +447,9 @@ def load_trends_for_run(
             )
             _log(trends_mod.describe(found))
             return found
-    _log(trends_mod.describe(None, explicit))
-    return None
+        _log(trends_mod.describe(None, explicit))  # wanted, but there is no key to do it with
+        return None
+    return None  # research is off and there is no list: nothing to report on every run
 
 
 def _generate_social(
@@ -577,7 +585,7 @@ def _cmd_trends(args: argparse.Namespace) -> int:
         print("Open it, replace the examples with what is trending right now, and save.")
         print("Where to look: TikTok Creative Center > Trends")
         print("  https://ads.tiktok.com/help/article/how-to-use-trends")
-        print("(You do not need this file: without it, trends are researched automatically.)")
+        print("(You do not need this file: captions are written without trends too.)")
         return 0
 
     from . import trend_research
@@ -636,8 +644,8 @@ def _print_report(report: Any) -> None:
             print(f"    - {url}")
     else:
         print("  The search returned NO sources, so nothing could be checked and these items are "
-              "UNVERIFIED. If they look wrong, set CLIPPER_AUTO_TRENDS=0 or write your own with "
-              "`clipper trends --init`.")
+              "UNVERIFIED. If they look wrong, keep CLIPPER_AUTO_TRENDS at 0 (the default) and write "
+              "your own list with `clipper trends --init`.")
 
 
 def _cmd_review(args: argparse.Namespace) -> int:
@@ -863,7 +871,8 @@ def build_parser() -> argparse.ArgumentParser:
             "--trends",
             metavar="FILE",
             help="your own file of what is trending (default: $CLIPPER_TRENDS, then ./trends.txt). "
-            "Without one, trends are researched automatically; see `clipper trends`",
+            "Without one, captions use general best practice unless you switch on the experimental "
+            "web research (CLIPPER_AUTO_TRENDS=1); see `clipper trends`",
         )
         sp.add_argument(
             "--region",
@@ -873,12 +882,13 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument(
             "--no-auto-trends",
             action="store_true",
-            help="do not research trends automatically (also: CLIPPER_AUTO_TRENDS=0)",
+            help="do not research trends this run, even if CLIPPER_AUTO_TRENDS=1",
         )
         sp.add_argument(
             "--refresh-trends",
             action="store_true",
-            help="research trends again now instead of using the cached result (cached for 3 days)",
+            help="research trends now (even though automatic research is off by default), "
+            "instead of using the cached result",
         )
 
     def add_find_args(sp: argparse.ArgumentParser) -> None:

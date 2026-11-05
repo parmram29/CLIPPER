@@ -48,7 +48,7 @@ You need at least your AI key.
 | `CLIPPER_BASE_URL` | Where the model lives. The default is Alibaba's Qwen (Singapore). Any OpenAI-compatible service works. |
 | `CLIPPER_MODEL` | Which model to use. The default is `qwen-plus`; `qwen-flash` is cheaper and fine for picking highlights. |
 | `CLIPPER_NICHE` | What your account is about, like `reality TV drama`. Optional. Used for captions. |
-| `CLIPPER_REGION` | Where your audience is, like `United States`. Optional. Used for trends. |
+| `CLIPPER_REGION` | Where your audience is, like `United States`. Optional. Only used if you turn trend research on. |
 
 Alibaba keys belong to a region. If yours came from the Beijing side, set `CLIPPER_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1`.
 
@@ -117,15 +117,16 @@ Each clip gets a cover title, three caption options, 3 to 5 hashtags, a few sear
 
 The thinking behind them comes from secondary sources, not TikTok itself (TikTok's own explanation wasn't reachable when this was built). Videos seem to spread when people watch to the end, replay, share and comment, and the first seconds matter a lot. Nobody outside TikTok knows the real weights, so there are no numbers in the prompt. A caption can't rescue a weak clip. It can set up the first seconds, add words people search for, and invite a reply. The length limits are this project's choices, not TikTok rules.
 
-### Trends
+### Trends (experimental, off by default)
 
-Captions can also use what's trending. TikTok has no official feed for that, so CLIPPER does web research instead. It asks a search-enabled Qwen model what's trending on TikTok for your niche and region, keeps only findings that match a page the search really returned, and caches the answer for 3 days. It's on by default, and with an Alibaba key it uses Alibaba's own search API, which reports the pages it used. Treat it as an experiment:
+Captions can use what's trending, but TikTok has no official feed for that. CLIPPER can try web research instead: it asks a search-enabled Qwen model what's trending on TikTok for your niche and region, keeps only findings that match a page the search really returned, and caches the answer for 3 days.
 
-- It's research from web pages about TikTok, not data from TikTok.
-- On the one account it's been tried on, the search ran and returned a single source, a video page, and the model found nothing usable in it. The search request has been reworked since, and that version hasn't been tried on a real account yet.
-- If it finds nothing, the captions are simply written without trends.
-- After a failed attempt it waits 24 hours before trying again on its own. `clipper trends --refresh` forces a try and shows what happened.
-- To turn it off, set `CLIPPER_AUTO_TRENDS=0`. To use your own list instead, run `clipper trends --init` and fill in `trends.txt`. A list you write always wins.
+**It doesn't work well yet, so it's off by default.** On the one account it was tried on, Alibaba's search returned seven pages, nearly all in Chinese and all about TikTok in general (news, and how-to guides for finding trends). The model correctly said none of them listed current hashtags for an English-language niche. The limit is what that search engine finds, not the code. Alibaba also refused its multi-round "agent" search form ("Non-streaming mode does not support Web Search in thinking mode"), and CLIPPER doesn't stream, so it uses the standard search.
+
+- To see what the search returns on your account, run `clipper trends --diagnose`. It tests each search request form and shows whether it was accepted, which pages came back, and what the model says about them.
+- To turn it on, set `CLIPPER_AUTO_TRENDS=1` in `.env`, or force one try with `--refresh-trends`. After a failed attempt it waits 24 hours before trying again on its own.
+- To use your own list instead, run `clipper trends --init` and fill in `trends.txt`. A list you write always wins.
+- Without trends, captions are written from the clip itself plus general best practice. That works fine.
 
 ## Getting clips onto your phone
 
@@ -159,6 +160,7 @@ Known gaps:
 
 - Videos need YouTube captions. There's no speech-to-text fallback yet.
 - Clip length is fixed at roughly one to two minutes.
+- Automatic trend research doesn't return usable results yet (see [Trends](#trends-experimental-off-by-default)).
 - Posting is manual. TikTok's API only allows private posts until an app is audited.
 - Only clip footage you have permission to use. YouTube's terms and copyright law apply to what you download and post.
 
@@ -180,7 +182,7 @@ Run `clipper doctor` first. Most problems show up there.
 
 **`AllocationQuota.FreeTierOnly` or "free quota has been exhausted"**: that's Alibaba refusing the request, not CLIPPER. It happens when a model's free allowance is used up and the "free quota only" switch is on, which stops Alibaba from billing you. Either turn the switch off for that model in the Alibaba console (their [docs](https://help.aliyun.com/en/model-studio/new-free-quota) say it can take about 30 minutes, and an account that isn't identity-verified has to verify and top up first), or use a model that still has free quota. Check prices before you switch to paying.
 
-**Trends come back empty**: run `clipper trends --diagnose`. It sends each web-search request form on its own, shows whether Alibaba accepted or refused it (with the reason), lists the pages the search found, and prints what the model says when it isn't boxed into a strict format. If the pages are off-topic or in another language, the search engine just isn't finding what you need. Captions work without trends, so `CLIPPER_AUTO_TRENDS=0` is a fine answer.
+**Trends come back empty** (only if you turned them on): run `clipper trends --diagnose`. It sends each web-search request form on its own, shows whether Alibaba accepted or refused it (with the reason), lists the pages the search found, and prints what the model says when it isn't boxed into a strict format. If the pages are off-topic or in another language, the search engine just isn't finding what you need. Captions work without trends, so leaving them off is a fine answer.
 
 ## Credits and license
 

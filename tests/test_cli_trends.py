@@ -61,6 +61,16 @@ def test_trends_status_when_there_is_no_file(tmp_path, capsys):
     assert "No trends available" in out and "clipper trends --refresh" in out
 
 
+def test_trends_status_does_not_claim_the_file_is_missing_when_it_is_only_the_unedited_template(tmp_path, capsys):
+    target = tmp_path / "trends.txt"
+    assert cli.main(["trends", "--init", "--file", str(target)]) == 0
+    capsys.readouterr()
+    assert cli.main(["trends", "--file", str(target)]) == 0
+    out = capsys.readouterr().out
+    assert target.is_file()  # it exists, so "not found" would be false
+    assert "No trends available" in out and "not found" not in out and "no list in" in out
+
+
 def test_trends_status_lists_the_hashtags_the_model_will_be_offered(tmp_path, capsys):
     assert cli.main(["trends", "--file", str(_trends_file(tmp_path, age_days=2))]) == 0
     out = capsys.readouterr().out
@@ -134,15 +144,17 @@ def test_the_default_trends_file_in_the_current_directory_is_picked_up(tmp_path,
     assert "#dramaalert" in fake_llm.requests[0]["body"]["messages"][-1]["content"]
 
 
-def test_without_any_trends_file_it_says_so_and_still_writes_captions(tmp_path, fake_llm, monkeypatch, capsys):
+def test_without_any_trends_file_captions_are_still_written_and_nothing_is_researched(tmp_path, fake_llm, monkeypatch, capsys):
     _ai_env(monkeypatch, fake_llm)
     fake_llm.reply = json.dumps(REPLY)
     monkeypatch.chdir(tmp_path)
     session = _session(tmp_path)
     assert cli.main(["social", str(session), "--top", "1"]) == 0
     out = capsys.readouterr().out
-    assert "No trends available" in out and "clipper trends --refresh" in out
+    assert len(fake_llm.requests) == 1  # just the caption call: web research is off by default
     assert "No current trend list was supplied" in fake_llm.requests[0]["body"]["messages"][-1]["content"]
+    assert "No trends available" not in out  # a run that never tried to research does not nag about it
+    assert (session / "social" / "clip_000.json").is_file()
 
 
 def test_the_environment_can_supply_the_niche_and_trends_file(tmp_path, fake_llm, monkeypatch):
