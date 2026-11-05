@@ -120,6 +120,8 @@ def find_highlights_only(
         window_seconds=ai.get("window_seconds") or DEFAULT_WINDOW_SECONDS,
         overlap_seconds=DEFAULT_OVERLAP_SECONDS if overlap is None else overlap,
         rerank=ai.get("rerank", True),
+        # None keeps the plain behaviour; a number turns on the drama check (see drama.py)
+        drama_share=ai.get("drama_share"),
     )
 
     if not highlights:

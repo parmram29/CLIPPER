@@ -78,6 +78,26 @@ These instructions are in English. What you WRITE is not.
 WHAT MAKES A CLIP GO VIRAL
 ==========================
 
+THE STOP-THE-THUMB TEST (NON-NEGOTIABLE)
+
+Every clip MUST contain at least one of these, and the more of them the better:
+
+* a confrontation, argument or call-out
+* an accusation, an insult or a put-down
+* someone caught out, exposed or lying
+* a shocking confession or reveal
+* a WTF moment: a sudden left turn, someone walking out, dead silence, a jaw-drop reaction
+* a punchline or savage comeback that really lands
+
+Two people calmly talking about feelings, plans, compliments, or what they are looking for in a
+partner is NOT a clip, however sweet or emotional it sounds. If a stretch of the video has no
+tension in it, skip it, even when nothing better is nearby. Fill the remaining slots with the
+next-hottest moments, never with filler.
+
+OPEN ON THE HOT LINE. The first sentence of the clip must already be the drama: the accusation,
+the insult, the shocking line. Start where the argument starts, not three sentences earlier.
+hook_text must be that opening line.
+
 Hunt for these, roughly in order of pull:
 
 1. DRAMA and beef: confrontations, call-outs, fights, betrayals, someone getting exposed.
@@ -86,19 +106,21 @@ Hunt for these, roughly in order of pull:
 4. WILD and outlandish: absurd stories, unhinged behavior, things that sound made up.
 5. WTF moments: sudden left turns, shock, dead silence, jaw-drop reactions.
 6. FUNNY: punchlines, roasts, savage insults and comebacks, cringe or awkward beats, bits that land.
-7. SPICY but appropriate: flirting, innuendo, sneaky "caught in the act" moments, risqué humor.
-   Suggestive is fine. Explicit is not.
-8. EMOTION: breakdowns, heartfelt confessions, triumphant or devastating reveals.
+7. SPICY but appropriate: sneaky "caught in the act" moments, innuendo and risqué humor, but only
+   when something happens (someone is caught, rejected or called out). Suggestive is fine.
+   Explicit is not.
+8. EMOTION: breakdowns and devastating reveals. Tears alone, with no conflict, are not enough.
 9. HOT TAKES: bold or controversial opinions people will want to argue about.
 10. CLIFFHANGERS and plot twists: a reveal that lands or a question left hanging.
 
-Prefer segments with a complete arc: setup, escalation, payoff. Open on the strongest line you
-can, not on throat-clearing. End on the payoff, not mid-thought.
+Prefer a short build-up, then escalation, then payoff. Open on the strongest line you can, not
+on throat-clearing or set-up. End on the payoff, not mid-thought.
 
 AVOID:
 
 * Intros, outros, sponsor reads, housekeeping, "like and subscribe"
 * Small talk, rambling, and topic transitions with no payoff
+* Calm relationship talk: compliments, preferences, "what I'm looking for", getting-to-know-you chat
 * Long explanations with no emotion, no conflict and no surprise
 * Anything that only makes sense with context from elsewhere in the video
 
@@ -211,5 +233,6 @@ FINAL CHECK BEFORE YOU ANSWER
 5. Exactly the 7 required fields, virality_score is a bare integer, category is from the list.
 6. No double quote (") inside any field value.
 7. Scores follow the rubric and are spread honestly, not all 8s and 9s.
+8. Every clip passes the stop-the-thumb test and opens on its hottest line.
 
 Answer with the JSON array and nothing else.""".replace("__RUBRIC__", VIRALITY_RUBRIC)

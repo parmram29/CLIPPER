@@ -131,6 +131,7 @@ def find_highlights(
     output_language: str | None = None,
     log: LogFn | None = None,
     fit_length: FitFn | None = None,
+    keep_all: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Call the AI model and return (highlights, token_usage).
 
@@ -139,6 +140,9 @@ def find_highlights(
 
     ``fit_length`` is a CLIPPER addition: when given, picks shorter than 58 s are widened with
     the surrounding conversation instead of being thrown away (see ``_widen_short_highlights``).
+
+    ``keep_all`` is another: return every valid pick instead of the first ``num_clips`` in the
+    model's own order, so a caller that ranks them afterwards sees all of them.
     """
     log = log or debug_log
     system_prompt = system_prompt or DEFAULT_HIGHLIGHT_PROMPT
@@ -244,7 +248,7 @@ def find_highlights(
     raw_highlights = parse_highlights_json(result, log)
     requested_ranges = parse_requested_ranges(user_direction)
     raw_highlights = _widen_short_highlights(raw_highlights, fit_length, requested_ranges, log)
-    valid = _validate_highlights(raw_highlights, num_clips, log, requested_ranges)
+    valid = _validate_highlights(raw_highlights, num_clips, log, requested_ranges, keep_all=keep_all)
     return valid, token_usage
 
 
@@ -361,6 +365,7 @@ def _validate_highlights(
     num_clips: int,
     log: LogFn,
     requested_ranges: list[tuple[float, float]] | None = None,
+    keep_all: bool = False,
 ) -> list[dict[str, Any]]:
     valid: list[dict[str, Any]] = []
     requested_ranges = requested_ranges or []
@@ -397,7 +402,7 @@ def _validate_highlights(
         else:
             log(f"Skip {title} ({duration:.0f}s) - outside {MIN_CLIP_SECONDS}-{MAX_CLIP_SECONDS}s")
 
-        if len(valid) >= num_clips:
+        if len(valid) >= num_clips and not keep_all:
             break
 
-    return valid[:num_clips]
+    return valid if keep_all else valid[:num_clips]

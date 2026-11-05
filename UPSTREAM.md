@@ -39,6 +39,9 @@ this repo, as the license requires.
 - `clipper/review.py`, `clipper/export.py`, `clipper/evaluation.py`: review sheet, export folder, and
   agreement between the model's scores and the user's ratings
 - `clipper/llm.py`: a small chat helper for the calls above
+- `clipper/drama.py`: what counts as a drama scene (a separate AI judgement of 6+ out of 10), the 6-of-8 bar,
+  the drama-first ranking, and the report behind `clipper check`. `windowing.py` does the judging and the
+  second look for confrontations; `viral_prompt.py` carries the "stop-the-thumb" rules
 - `clipper/diagnostics.py`: the facts printed when a download dies with a cryptic file error (certifi's
   certificate file, cookies, free disk space), and a repair for a stale remembered certificate path. The CLI
   uses it so that one failed clip no longer stops the others (`cli.render_clips`)
@@ -65,6 +68,10 @@ this repo, as the license requires.
   length check instead of being discarded (`windowing.fit_to_length` does the widening). Without it nothing
   changes. The check for invalid timestamps also catches `TypeError`/`AttributeError`, so a model that writes
   a time as a number gets that one pick skipped instead of crashing the run.
+- `clipper/highlight_finder.py` (third change): `find_highlights()` and `_validate_highlights()` take an
+  optional `keep_all`. Upstream keeps the first `num_clips` valid picks in the model's own order, which threw
+  away candidates before anything ranked them (6 of 22 on a real run); with `keep_all` every valid pick is
+  returned so the caller can rank them all. Without it nothing changes.
 - `clipper/constants.py`: one docstring now names the new package.
 - `clipper/helpers.py`: a `# nosec B310` comment on the one-time face-model download, which uses a
   fixed https URL, so the security scanner `bandit` does not flag it. No behaviour change.
