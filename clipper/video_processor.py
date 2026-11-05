@@ -246,6 +246,8 @@ def _download_section_module(
         ),
         "force_keyframes_at_cuts": True,
         "cookiefile": cookies_path,
+        # CLIPPER: CLIPPER_YTDLP_VERBOSE=1 turns on yt-dlp's debug output and error tracebacks.
+        "verbose": bool(os.environ.get("CLIPPER_YTDLP_VERBOSE")),
         "logger": _YTDlpLogger(log),
         "progress_hooks": [
             lambda d: _yt_dlp_progress_hook(d, log)

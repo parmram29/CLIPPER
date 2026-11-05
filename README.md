@@ -176,6 +176,8 @@ Run `clipper doctor` first. Most problems show up there.
 
 **YouTube says 403 or the cookies are stale**: export a fresh `cookies.txt`.
 
+**A clip fails with `Unable to handle request` or `FileNotFoundError`**: this is yt-dlp failing to start a download, before anything reaches YouTube. A missing certificate file produces exactly this message. CLIPPER keeps the clips it has already finished, tries the failing one once more with yt-dlp's full debug output, prints a `Diagnostics` block (where certifi's certificate file is and whether it exists, your cookies file, free disk space), and carries on with the remaining clips. Then run the same command again: finished clips are skipped, so only the missing ones are redone. If the diagnostics say the certificate file is missing, `pip install --force-reinstall certifi` fixes it. To see yt-dlp's full output for any download, set `CLIPPER_YTDLP_VERBOSE=1`.
+
 **ffmpeg is missing, or `brew install ffmpeg` runs for hours (Intel Macs)**: Homebrew has stopped building ready-made packages for Intel Macs, so it compiles everything from source ([discussion](https://github.com/orgs/Homebrew/discussions/7044)). A prebuilt ffmpeg binary works fine. Download one (evermeet.cx publishes Intel builds), put it in `~/bin`, and add that folder to your PATH. `clipper doctor` should then say ffmpeg has libass.
 
 **`pip` can't find `mediapipe` (Intel Macs)**: MediaPipe's current releases only ship Mac wheels for Apple Silicon, and the last release with Intel wheels covers Python 3.9 to 3.12 only ([PyPI files](https://pypi.org/project/mediapipe/#files)). `setup.sh` skips it, and CLIPPER uses a centered crop instead. For face tracking on an Intel Mac, make a fresh environment with Python 3.9 to 3.12 and run `pip install 'clipper[face]'`. On Debian or Ubuntu, face tracking also needs `sudo apt install libegl1 libgles2`.
@@ -208,7 +210,7 @@ The work is split like this:
 | Vertical crop (face tracking or centered), captions, hook text, GPU encoder detection | `portrait.py`, `caption_generator.py`, `hook_generator.py`, `gpu.py` | yt-short-clipper (face tracking made optional) |
 | Small helpers: paths, constants, cookie check, subtitle parsing, watermark | `helpers.py`, `constants.py`, `cookies.py`, `srt_parser.py`, `watermark.py` | yt-short-clipper (comments only) |
 | Session flow and rendering | `session.py`, `clip_processor.py` | yt-short-clipper (long-video windows plugged in) |
-| Command line and settings | `cli.py`, `config.py` | added here |
+| Command line and settings | `cli.py`, `config.py`, `diagnostics.py` | added here |
 | Long-video windows and re-scoring | `windowing.py` | added here |
 | The `viral` prompt and profiles | `viral_prompt.py`, `profiles.py` | added here |
 | Titles, captions, hashtags, trends | `social.py`, `trends.py`, `trend_research.py`, `llm.py` | added here |
