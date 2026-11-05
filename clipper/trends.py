@@ -128,9 +128,9 @@ def describe(trends: Trends | None, path: str | Path | None = None) -> str:
     if trends is None:
         where = Path(path) if path else Path(DEFAULT_TRENDS_FILE)
         return (
-            f"No trends available ({where} not found and no automatic research): captions use "
-            "general best practice only. `clipper trends --refresh` researches them; "
-            "`clipper trends --init` lets you write your own."
+            f"No trends available (no list in {where} and no web research result): captions use "
+            "general best practice only. `clipper trends --init` lets you write your own list; "
+            "`clipper trends --refresh` tries the experimental web research."
         )
     age = "today" if trends.age_days < 1 else f"{trends.age_days:.0f} day(s) ago"
     if trends.source == "web":

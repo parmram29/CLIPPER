@@ -65,13 +65,30 @@ def test_trends_are_researched_automatically_when_you_have_not_supplied_any(auto
     assert copy["trend_tags_used"] == ["dramaalert"]
 
 
-def test_it_is_on_by_default(monkeypatch, fake_llm, tmp_path):
+def test_it_is_off_by_default(monkeypatch, fake_llm, tmp_path, capsys):
     _ai_env(monkeypatch, fake_llm)
     monkeypatch.delenv("CLIPPER_AUTO_TRENDS")  # nothing set at all
     monkeypatch.chdir(tmp_path)
     _two_stage(fake_llm)
+    session = _session(tmp_path)
+    assert cli.main(["social", str(session), "--top", "1"]) == 0
+    out = capsys.readouterr().out
+
+    assert _researched(fake_llm) == []  # no search request was made
+    assert len(_captioned(fake_llm)) == 1  # the captions were still written
+    assert "No current trend list was supplied" in _captioned(fake_llm)[0]["body"]["messages"][-1]["content"]
+    assert (session / "social" / "clip_000.json").is_file()
+    # and a run that never tried to research says nothing about it
+    assert "Researching" not in out and "No trends available" not in out
+
+
+def test_an_empty_value_from_a_fresh_env_file_leaves_it_off(monkeypatch, fake_llm, tmp_path):
+    _ai_env(monkeypatch, fake_llm)
+    monkeypatch.setenv("CLIPPER_AUTO_TRENDS", "")  # `CLIPPER_AUTO_TRENDS=` with nothing after the sign
+    monkeypatch.chdir(tmp_path)
+    _two_stage(fake_llm)
     cli.main(["social", str(_session(tmp_path)), "--top", "1"])
-    assert len(_researched(fake_llm)) == 1
+    assert _researched(fake_llm) == []
 
 
 def test_the_result_is_cached_so_later_runs_cost_nothing_extra(auto_on, fake_llm):
@@ -103,14 +120,63 @@ def test_it_can_be_switched_off_from_the_environment(value, auto_on, fake_llm, m
     assert "No current trend list was supplied" in _captioned(fake_llm)[0]["body"]["messages"][-1]["content"]
 
 
-@pytest.mark.parametrize("value", ["1", "true", "yes", "anything-else", ""])
-def test_auto_trends_enabled_parsing(value):
+@pytest.mark.parametrize("value", ["1", "true", "True", "yes", "on", " ON ", " 1 "])
+def test_only_these_values_switch_research_on(value):
     assert cli.auto_trends_enabled({"CLIPPER_AUTO_TRENDS": value}) is True
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", "off", "", "  ", "anything-else", "2", "enabled"])
+def test_everything_else_leaves_research_off(value):
+    # a typo must not quietly start spending search calls
+    assert cli.auto_trends_enabled({"CLIPPER_AUTO_TRENDS": value}) is False
+
+
+def test_research_is_off_when_the_variable_is_missing_or_unset():
+    assert cli.auto_trends_enabled({}) is False
 
 
 def test_the_flag_switches_it_off(auto_on, fake_llm):
     cli.main(["social", str(auto_on), "--top", "1", "--no-auto-trends"])
     assert _researched(fake_llm) == []
+
+
+def test_refresh_trends_researches_now_even_though_it_is_off(monkeypatch, fake_llm, tmp_path):
+    _ai_env(monkeypatch, fake_llm)
+    monkeypatch.setenv("CLIPPER_AUTO_TRENDS", "0")
+    monkeypatch.chdir(tmp_path)
+    _two_stage(fake_llm)
+    cli.main(["social", str(_session(tmp_path)), "--top", "1", "--refresh-trends"])
+    assert len(_researched(fake_llm)) == 1
+
+
+def test_no_auto_trends_beats_refresh_trends(auto_on, fake_llm):
+    cli.main(["social", str(auto_on), "--top", "1", "--refresh-trends", "--no-auto-trends"])
+    assert _researched(fake_llm) == []
+
+
+def test_a_refresh_with_no_api_key_says_so_instead_of_staying_silent(monkeypatch, fake_llm, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)  # no key anywhere
+    assert cli.load_trends_for_run(None, refresh=True) is None
+    assert "No trends available" in capsys.readouterr().out and fake_llm.requests == []
+
+
+def test_off_and_no_key_and_no_list_is_silent(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert cli.load_trends_for_run(None) is None
+    assert capsys.readouterr().out == ""
+
+
+def test_your_own_file_still_works_while_research_is_off(monkeypatch, fake_llm, tmp_path, capsys):
+    _ai_env(monkeypatch, fake_llm)
+    monkeypatch.setenv("CLIPPER_AUTO_TRENDS", "0")
+    monkeypatch.chdir(tmp_path)
+    mine = tmp_path / "mine.txt"
+    mine.write_text("#myowntag", encoding="utf-8")
+    _two_stage(fake_llm)
+    cli.main(["social", str(_session(tmp_path)), "--top", "1", "--trends", str(mine)])
+    assert _researched(fake_llm) == []
+    assert "#myowntag" in _captioned(fake_llm)[0]["body"]["messages"][-1]["content"]
+    assert "Using trends from" in capsys.readouterr().out
 
 
 def test_without_an_api_key_it_quietly_does_nothing(monkeypatch, fake_llm, tmp_path, capsys):
