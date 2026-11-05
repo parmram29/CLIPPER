@@ -57,7 +57,8 @@ def test_trends_init_refuses_to_overwrite(tmp_path, capsys):
 
 def test_trends_status_when_there_is_no_file(tmp_path, capsys):
     assert cli.main(["trends", "--file", str(tmp_path / "none.txt")]) == 0
-    assert "No trends file" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "No trends available" in out and "clipper trends --refresh" in out
 
 
 def test_trends_status_lists_the_hashtags_the_model_will_be_offered(tmp_path, capsys):
@@ -140,7 +141,7 @@ def test_without_any_trends_file_it_says_so_and_still_writes_captions(tmp_path, 
     session = _session(tmp_path)
     assert cli.main(["social", str(session), "--top", "1"]) == 0
     out = capsys.readouterr().out
-    assert "No trends file" in out and "clipper trends --init" in out
+    assert "No trends available" in out and "clipper trends --refresh" in out
     assert "No current trend list was supplied" in fake_llm.requests[0]["body"]["messages"][-1]["content"]
 
 

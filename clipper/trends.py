@@ -50,12 +50,16 @@ _HASHTAG = re.compile(r"#(\w+)", re.UNICODE)
 
 @dataclass(frozen=True)
 class Trends:
-    path: Path
+    # ``path`` is None for trends researched automatically (see trend_research.py)
+    path: Path | None
     text: str
     age_days: float
     hashtags: tuple[str, ...]
     stale: bool
     truncated: bool
+    source: str = "file"  # "file" (you wrote it) or "web" (researched automatically)
+    verified: bool | None = None  # web only: True if every item was matched to a returned source
+    note: str = ""  # web only: what the research was about, for display
 
 
 def extract_hashtags(text: str) -> list[str]:
@@ -100,6 +104,15 @@ def load_trends(
     )
 
 
+def is_unedited_template(trends: Trends | None) -> bool:
+    """True if the file is still the template written by `clipper trends --init`.
+
+    Its example hashtags are placeholders, so they must never be treated as real trends, and
+    a leftover template must not stop automatic research from running.
+    """
+    return trends is not None and trends.source == "file" and trends.text == _clean(TEMPLATE)
+
+
 def init_template(path: str | Path | None = None) -> Path:
     """Write the template. Refuses to overwrite an existing file."""
     file = Path(path) if path else Path(DEFAULT_TRENDS_FILE)
@@ -115,10 +128,24 @@ def describe(trends: Trends | None, path: str | Path | None = None) -> str:
     if trends is None:
         where = Path(path) if path else Path(DEFAULT_TRENDS_FILE)
         return (
-            f"No trends file ({where}): captions use general best practice only. "
-            "Run `clipper trends --init` to add current trends."
+            f"No trends available ({where} not found and no automatic research): captions use "
+            "general best practice only. `clipper trends --refresh` researches them; "
+            "`clipper trends --init` lets you write your own."
         )
     age = "today" if trends.age_days < 1 else f"{trends.age_days:.0f} day(s) ago"
+    if trends.source == "web":
+        check = (
+            "every item matched a source the search returned"
+            if trends.verified
+            else "UNVERIFIED: the search returned no sources to check against"
+        )
+        line = (
+            f"Using trends researched from the web ({trends.note}; updated {age}; "
+            f"{len(trends.hashtags)} hashtag(s); {check})"
+        )
+        if trends.stale:
+            line += f". STALE: older than {STALE_AFTER_DAYS} days"
+        return line
     line = f"Using trends from {trends.path} (updated {age}; {len(trends.hashtags)} hashtag(s))"
     if trends.stale:
         line += f". STALE: older than {STALE_AFTER_DAYS} days, so refresh it before relying on it"
