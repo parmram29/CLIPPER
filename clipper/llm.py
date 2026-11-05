@@ -104,6 +104,18 @@ def extract_search_sources(node: Any) -> list[dict[str, Any]]:
 
 NATIVE_PATH = "/api/v1/services/aigc/text-generation/generation"
 
+# Forms of the native request, most capable first, each tried only if the one before is refused.
+# Alibaba documents the "agent" strategy as multi-round retrieval: it can search more than once,
+# which a single quick lookup (what a long prompt tends to trigger) does not.
+_NATIVE_ATTEMPTS: tuple[tuple[str, dict[str, Any]], ...] = (
+    (
+        "agent search",
+        {"enable_search": True, "search_options": {"forced_search": True, "enable_source": True, "search_strategy": "agent"}},
+    ),
+    ("enable_search + options", {"enable_search": True, "search_options": {"forced_search": True, "enable_source": True}}),
+    ("enable_search only", {"enable_search": True}),
+)
+
 
 def native_search_url(base_url: str) -> str:
     """Alibaba's native text-generation endpoint on the same host as the compatible-mode URL."""
@@ -140,7 +152,7 @@ def chat_with_search_native(
 
     data: dict[str, Any] | None = None
     last_error: Exception | None = None
-    for extra in _SEARCH_ATTEMPTS:
+    for label, extra in _NATIVE_ATTEMPTS:
         body = {
             "model": ai["model"],
             "input": {"messages": messages},
@@ -161,7 +173,7 @@ def chat_with_search_native(
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 data = json.loads(response.read().decode("utf-8"))
             if info is not None:
-                info["request"] = "native API: enable_search" + (" + options" if "search_options" in extra else " only")
+                info["request"] = f"native API: {label}"
             break
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "replace")[:700]

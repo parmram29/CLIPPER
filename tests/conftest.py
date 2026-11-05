@@ -23,7 +23,14 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(error)
             return
         native = self.path.endswith("/generation")  # Alibaba's native API, not the compatible one
+        options = (body.get("parameters") or {}).get("search_options") or {}
+        if self.server.reject_strategy and "search_strategy" in options:
+            refused_strategy = True
+        else:
+            refused_strategy = False
         refused = self.server.reject_keys & (set(body) | set(body.get("parameters") or {}))
+        if refused_strategy:
+            refused = {"search_strategy"}
         if refused:
             error = json.dumps({"error": {"message": f"unsupported parameter(s): {sorted(refused)}"}}).encode()
             self.send_response(400)
@@ -102,6 +109,7 @@ def fake_llm(monkeypatch):
     server.reply_fn = None
     server.reject_response_format = False
     server.reject_keys = set()  # request fields to refuse with a 400, e.g. {"enable_search"}
+    server.reject_strategy = False  # refuse search_options.search_strategy (a nested field)
     server.extra_response = {}  # extra top-level fields to add to every reply
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

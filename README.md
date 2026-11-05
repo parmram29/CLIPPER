@@ -1,201 +1,218 @@
 # CLIPPER
 
-Turn a long video into vertical 9:16 short-form clips: an LLM picks the highlights from the
-transcript, then each one is cut, reframed, captioned word by word, and given a hook overlay.
+Turn a long video into vertical clips for TikTok, Reels and Shorts, from the command line.
 
-CLIPPER is a headless CLI built on the pipeline from
-[jipraks/yt-short-clipper](https://github.com/jipraks/yt-short-clipper) (MIT). See
-[UPSTREAM.md](UPSTREAM.md) for exactly what was kept, dropped, and changed.
+Give it a YouTube link. It reads the transcript, asks an AI model which moments are worth clipping, cuts them to 9:16, adds word-by-word captions and a hook line, and writes a title, caption and hashtags for each clip. When it's done, everything is in one folder you can AirDrop to your phone.
 
-## Setup
+> **Built on top of an existing project.**
+> CLIPPER isn't written from scratch. It's built on top of
+> [yt-short-clipper](https://github.com/jipraks/yt-short-clipper) by Aji Prakoso
+> ([@jipraks](https://github.com/jipraks)), which is MIT licensed. The core of the video pipeline is
+> theirs: grabbing a section of a video, picking highlights with an AI model, face-tracked cropping,
+> burned-in captions and hook text. The original is a Windows desktop app. This repo keeps its Python
+> pipeline, drops the app, and adds a command line, long-video handling, a different clip-picking prompt,
+> captions and hashtags, and ways to review and export the results. [Credits and license](#credits-and-license)
+> spells out exactly what came from where.
 
-Needs Python 3.10+ and `ffmpeg` with libass on your PATH (macOS: `brew install ffmpeg`).
+## What happens when you run it
+
+1. It fetches the video's captions from YouTube, with word timings.
+2. An AI model reads the transcript and picks the best moments, each one to two minutes long, and scores how likely people are to watch, share and argue about them.
+3. It downloads just those sections (not the whole video) and crops them to vertical.
+4. It burns in word-by-word captions and a hook line at the start.
+5. It writes a cover title, three caption options, hashtags, search keywords and a pinned comment for each clip.
+6. If you ask, it copies the finished clips into one folder.
+
+The video needs captions on YouTube. Auto-generated ones are fine, but there's no speech-to-text yet, so a video with no captions at all won't work.
+
+## Quick start
+
+You need Python 3.10 or newer, and `ffmpeg` (with libass) on your PATH. On a Mac that's `brew install ffmpeg`.
 
 ```bash
+git clone https://github.com/parmram29/CLIPPER
+cd CLIPPER
 bash setup.sh
 source .venv/bin/activate
 ```
 
-**Face tracking is optional.** It needs MediaPipe, which `setup.sh` tries to install and skips
-if there is no build for your machine. Without it, `--reframe auto` (the default) uses a centered
-crop and everything else works. On Debian/Ubuntu, face tracking also needs
-`sudo apt install libegl1 libgles2`. `clipper doctor` reports both cases.
+`setup.sh` makes a virtual environment, installs everything, creates a `.env` file for you to fill in, and ends with a health check. Face tracking is optional, and the script skips it with a short note if your machine can't install it (more on that under [Troubleshooting](#troubleshooting)).
 
-Then edit `.env`:
+### Fill in `.env`
 
-| Variable | Meaning |
+You need at least your AI key.
+
+| Setting | What it's for |
 |---|---|
-| `CLIPPER_API_KEY` | key for any OpenAI-compatible endpoint |
-| `CLIPPER_BASE_URL` | default: Alibaba Model Studio (Qwen), international endpoint |
-| `CLIPPER_MODEL` | default: `qwen-plus` |
-| `CLIPPER_COOKIES` | path to a YouTube `cookies.txt` (default `./cookies.txt`) |
+| `CLIPPER_API_KEY` | Your key for the AI model. Required. |
+| `CLIPPER_BASE_URL` | Where the model lives. The default is Alibaba's Qwen (Singapore). Any OpenAI-compatible service works. |
+| `CLIPPER_MODEL` | Which model to use. The default is `qwen-plus`; `qwen-flash` is cheaper and fine for picking highlights. |
+| `CLIPPER_NICHE` | What your account is about, like `reality TV drama`. Optional. Used for captions. |
+| `CLIPPER_REGION` | Where your audience is, like `United States`. Optional. Used for trends. |
 
-Alibaba keys are region-specific; for a Beijing key use
-`https://dashscope.aliyuncs.com/compatible-mode/v1`
-([docs](https://www.alibabacloud.com/help/en/model-studio/text-generation)).
-`cookies.txt` and `.env` are git-ignored. Never commit them.
+Alibaba keys belong to a region. If yours came from the Beijing side, set `CLIPPER_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1`.
 
-```bash
-clipper doctor --check-ai    # verifies ffmpeg, libraries, cookies, and makes one tiny AI call
-```
+### Add your YouTube cookies
 
-## Use
+YouTube may refuse to serve a video unless the request looks like it comes from a logged-in browser. So CLIPPER wants a `cookies.txt` exported from one. A browser extension such as "Get cookies.txt LOCALLY" can do it. Export for youtube.com only, not for all sites, and save the file as `cookies.txt` in the project folder.
 
-```bash
-clipper find "https://www.youtube.com/watch?v=..." --clips 5     # pick highlights, writes a session
-clipper process out/sessions/<session> --top 3                   # render the 3 best (+ titles/captions)
-clipper run "https://www.youtube.com/watch?v=..." --top 3        # both steps at once
-clipper run "https://www.youtube.com/watch?v=..." --top 3 --export --open   # ...and put them in a folder
-```
+That file is a copy of your logged-in session, so treat it like a password. It's git-ignored, but don't share it, and consider using a separate YouTube account for this.
 
-Clips land in `<session>/clips/clip_NNN/master.mp4` with a `data.json` (title, description, hook, timings).
-
-Useful options:
-
-- `--direction "skip the intro; use 12:30 - 13:40"` steers the highlight model. An explicit clock range is used exactly.
-- `--reframe auto|face|centered|original` and `--background blurred|black`. `auto` (default) tracks faces if MediaPipe is installed and centers otherwise; an explicit `face` without MediaPipe fails before downloading anything. For centered clips the default background is a blurred copy of the video; `--background black` gives plain bars. Face tracking is the slow path; centered is a single ffmpeg pass.
-- `--pick 1,3-4` or `--top N` chooses which clips to render. Rendered clips are skipped on re-run.
-
-### What it looks for
-
-`--profile viral` (the default) hunts for the moments people watch twice and send to friends:
-drama and beef, arguments, scandal and secrets, wild and outlandish stories, WTF moments, funny
-punchlines, roasts and insults, spicy-but-appropriate moments (flirting, innuendo, "caught in the
-act", never explicit), strong emotion, hot takes, and cliffhangers. It will not pick clips whose
-appeal is a slur or hate aimed at a group, graphic violence, explicit sexual content, or private
-information. Each pick gets a `virality_score` from a fixed rubric (hook 0-3, intensity 0-2,
-surprise 0-2, shareability 0-2, clean cut 0-1) and a `category`.
-
-`--profile podcast` is upstream's original prompt. `--prompt-file niche.txt` replaces either with your own
-(it must contain `{transcript}` and `{num_clips}`; start from `clipper/viral_prompt.py`).
-
-### Long videos and streams
-
-Videos longer than about 37 minutes are not sent in one prompt. The transcript is split into
-overlapping windows (`--window-minutes 30`, `--overlap-minutes 2`), each window proposes
-candidates, duplicates of the same moment are dropped, and one final call re-scores every
-survivor on a single scale, so a 7 from a dull stretch and a 7 from a lively one mean the
-same thing. Pass `--no-rerank` to skip that last call. Shorter videos behave as before.
-
-### Captions, hashtags and trends
-
-`process` and `run` write post copy for each clip to `<session>/social/clip_NNN.json` (skipped if no API key
-is set; `--no-social` turns it off). `clipper social <session>` writes or rewrites it, `--force` overwrites.
-Each clip gets:
-
-- a **cover title** (60 characters);
-- **three caption angles** to test against each other: *tease* (promise the payoff, don't give it away),
-  *question* (something people will answer in the comments), and *hot take*. Each is at most 150 characters with
-  the hook in the first 100, one natural search keyword early, and no spoilers. The tone follows the clip's
-  category (a funny clip leaves the punchline out; a drama clip leads with the conflict);
-- **3-5 hashtags**: a broad one or two, one or two specific to what happens, and at most one trending tag;
-- **search keywords** (what someone might type to find it) and a **pinned comment** that invites replies.
-
-What this is built on, and how sure that is. Guidance about TikTok's For You feed commonly points to
-people finishing a video, replaying it, sharing it, commenting and saving it, and to the opening seconds. That
-comes from secondary sources (I could not read TikTok's own explanation), and the exact weightings are not public,
-so nothing here uses numbers. A caption cannot rescue a weak clip: it sets up the first seconds, adds words people
-search for, and invites a reply. The limits above are CLIPPER's choices, not platform rules. Sources also disagree
-on TikTok's caption length limit, and say only the first 80-125 characters show before "more".
-
-**Trends are researched automatically.** There is no official feed of TikTok trends: the
-[Creative Center](https://ads.tiktok.com/help/article/how-to-use-trends) is a dashboard, the Research API is limited to
-non-commercial research (per secondary sources), and scraping TikTok is brittle and may break its terms. And your own feed is
-personalised, so it is a poor sample of what is trending. So CLIPPER asks a model with **web search** switched on (Qwen, through
-your existing key) what is trending on TikTok right now for your niche and region, and feeds the result to the captions.
-Nothing to paste, nothing to refresh by hand: the result is cached and re-researched on its own every 3 days (a CLIPPER default).
+### Check your setup
 
 ```bash
-clipper trends --refresh                          # research now and show what it found and how well it checked out
-clipper social out/sessions/<session> --niche "reality TV drama" --region "United States"
+clipper doctor --check-ai
 ```
 
-Set `CLIPPER_NICHE` and `CLIPPER_REGION` in `.env` once and forget them. What you should know about it:
+This checks ffmpeg, the Python libraries, your cookies, and your AI key (with one tiny test call). Anything marked `[FAIL]` needs fixing. `[WARN]` lines are optional extras.
 
-- **It is research from web pages about TikTok, not data from TikTok.** It is only as good as what the search finds.
-- **It is checked, not trusted, where checking is possible.** Each item must cite a page, and an item is kept only if that page was
-  among the sources the search returned; anything else (a made-up hashtag with a made-up link) is dropped, and `clipper trends --refresh`
-  tells you how many. **But per Alibaba's docs, the OpenAI-compatible endpoint (the default) never returns sources**, so results through it
-  are always labelled **UNVERIFIED** (here and in the captions prompt). Alibaba's native API can return them: set
-  `CLIPPER_SEARCH_API=dashscope` to use it. That route follows Alibaba's published description of the API and has not been run
-  against a real account.
-- **Web text is treated as data.** It is cut to short plain lines before it reaches the captions prompt, since a web page can contain
-  text aimed at an AI.
-- **It may not work on your account.** Web search is a separate feature; I could not read Alibaba's docs from where this was built,
-  so which models support it, what it costs, and the exact reply format are unconfirmed. Run `clipper trends --refresh` once to find out.
-  If search is refused, captions are still written without trends; set `CLIPPER_SEARCH_MODEL` to a search-capable model, or
-  `CLIPPER_AUTO_TRENDS=0` to switch it off. After a failed attempt it waits 24 hours before trying again on its own, so a
-  feature that does not work on your account costs one call a day, not one per run (`--refresh-trends` forces a retry).
-- **You can override it.** A file you name (`--trends FILE`) or a filled-in `./trends.txt` (`clipper trends --init`) takes priority.
+### Make your first clips
 
-A trend is only used when it genuinely fits the clip, and `trend_tags_used` records which ones were, so you can compare posts later.
-With no trends at all the captions use general best practice only and the model is told not to claim anything is trending.
-`--niche` (or `CLIPPER_NICHE`) keeps wording and hashtags consistent across an account.
+```bash
+clipper run "https://www.youtube.com/watch?v=..." --top 3 --export --open
+```
 
-To learn what works for your account, post different angles (tease on one clip, question on the next) and compare
-TikTok's own view and watch-time numbers per post. Nothing here measures that for you yet.
+That finds highlights, renders the best three, writes their captions and hashtags, copies the clips into a folder on your Desktop, and opens it. The clips are also kept under `out/sessions/<date-time>/clips/`.
 
-### Getting clips onto your phone
+## Commands
+
+| Command | What it does |
+|---|---|
+| `clipper doctor` | Checks your setup. Add `--check-ai` to test the AI key. |
+| `clipper find URL` | Picks highlights and saves them as a session. |
+| `clipper process SESSION` | Renders clips from a saved session. |
+| `clipper run URL` | `find` and `process` in one go. |
+| `clipper social SESSION` | Writes (or rewrites) titles, captions and hashtags. |
+| `clipper export SESSION` | Copies finished clips into one folder. |
+| `clipper review SESSION` | Writes a spreadsheet so you can rate the picks. |
+| `clipper eval review.csv` | Compares your ratings with the AI's scores. |
+| `clipper trends` | Shows or refreshes the trend list that captions use. |
+
+Options you'll probably want:
+
+- `--direction "skip the intro; use 12:30 - 13:40"` steers the AI. A clock range you spell out is used exactly.
+- `--clips 8` is how many highlights to ask for (default 5). `--top 3` is how many to render.
+- `--pick 1,3-4` renders specific clips from a saved session. Clips that are already rendered are skipped on a re-run.
+- `--reframe` controls how 16:9 becomes 9:16. `auto` (the default) uses face tracking if it's installed and a centered crop if not. You can also say `face`, `centered`, or `original` to keep the source framing. For centered clips, `--background blurred` (default) puts a blurred copy of the video behind it, and `black` gives plain bars.
+- `--export`, `--export-to DIR` and `--open` copy the finished clips somewhere handy.
+- `--no-captions`, `--no-hook` and `--no-social` skip those steps.
+
+## How it picks clips
+
+The default profile, `viral`, looks for the moments people watch twice and send to a friend: drama and beef, arguments, scandal and secrets, wild stories, WTF moments, funny punchlines, roasts, spicy-but-appropriate moments (flirting, innuendo, getting caught, never explicit), strong emotion, hot takes, and cliffhangers. It steers clear of slurs aimed at groups, graphic violence, explicit sexual content, and private information.
+
+Every pick gets a 1 to 10 score from a fixed rubric (hook, intensity, surprise, shareability, clean ending) and a category. The score is the AI's opinion. [Rating the picks](#rating-the-picks) shows how to find out whether its taste matches yours.
+
+`--profile podcast` is the original prompt from yt-short-clipper, tuned for podcasts. `--prompt-file my-niche.txt` swaps in your own. It has to contain `{transcript}` and `{num_clips}`, and `clipper/viral_prompt.py` is a good place to start.
+
+Clips come out around one to two minutes long. The original project only keeps picks of 58 to 120 seconds, and a few seconds of padding get added around each.
+
+## Long videos and streams
+
+A video longer than about 37 minutes isn't sent to the model in one piece. CLIPPER splits the transcript into overlapping 30-minute windows (`--window-minutes` and `--overlap-minutes` change that), asks for candidates in each window, and drops duplicates of the same moment. Then one last call scores all the survivors together, so a 7 from a quiet stretch means the same thing as a 7 from a busy one. `--no-rerank` skips that last call. Shorter videos go through in a single call, like the original.
+
+## Captions, hashtags and trends
+
+Each clip gets a cover title, three caption options, 3 to 5 hashtags, a few search keywords, and a pinned comment. The three captions take different angles, a tease, a question and a hot take, so you can try them against each other. Each one is under 150 characters with the hook at the start and no spoilers. It all lands in `<session>/social/`, and `clipper export` puts the captions in a `captions.txt` you can copy from.
+
+The thinking behind them comes from secondary sources, not TikTok itself (TikTok's own explanation wasn't reachable when this was built). Videos seem to spread when people watch to the end, replay, share and comment, and the first seconds matter a lot. Nobody outside TikTok knows the real weights, so there are no numbers in the prompt. A caption can't rescue a weak clip. It can set up the first seconds, add words people search for, and invite a reply. The length limits are this project's choices, not TikTok rules.
+
+### Trends
+
+Captions can also use what's trending. TikTok has no official feed for that, so CLIPPER does web research instead. It asks a search-enabled Qwen model what's trending on TikTok for your niche and region, keeps only findings that match a page the search really returned, and caches the answer for 3 days. It's on by default, and with an Alibaba key it uses Alibaba's own search API, which reports the pages it used. Treat it as an experiment:
+
+- It's research from web pages about TikTok, not data from TikTok.
+- On the one account it's been tried on, the search ran and returned a single source, a video page, and the model found nothing usable in it. The search request has been reworked since, and that version hasn't been tried on a real account yet.
+- If it finds nothing, the captions are simply written without trends.
+- After a failed attempt it waits 24 hours before trying again on its own. `clipper trends --refresh` forces a try and shows what happened.
+- To turn it off, set `CLIPPER_AUTO_TRENDS=0`. To use your own list instead, run `clipper trends --init` and fill in `trends.txt`. A list you write always wins.
+
+## Getting clips onto your phone
 
 ```bash
 clipper export out/sessions/<session> --open
 ```
 
-copies the finished clips into one folder (default `~/Desktop/clipper-exports/<session>`) named
-`01 - short-title.mp4`, with a `captions.txt` of ready-to-paste captions and the review sheet. On a Mac,
-select them in Finder and use Share > AirDrop. (AirDrop can't be driven from a command line, so the
-tool stops at the folder.) `--to DIR` exports anywhere, for example a folder that syncs to your phone.
-`--export`, `--export-to DIR` and `--open` do the same straight after `process` or `run`.
+This copies the finished clips into one folder (by default `~/Desktop/clipper-exports/<session>`), named like `01 - short-title.mp4`. A `captions.txt` with ready-to-paste captions and the review spreadsheet go in with them. On a Mac, select the clips in Finder and use Share > AirDrop. AirDrop can't be driven from a command line, so CLIPPER stops at the folder. `--to DIR` exports anywhere, for example a folder that syncs to your phone.
 
-### Reviewing picks and measuring the prompt
+## Rating the picks
 
 ```bash
-clipper review out/sessions/<session>      # writes review.csv, one row per pick
+clipper review out/sessions/<session>
 ```
 
-Import `review.csv` into Google Sheets (File > Import > Upload), fill the `my_rating` column
-(1-10) for the picks you have judged, download it as CSV, and run:
+This writes `review.csv`, one row per pick. Import it into Google Sheets (File > Import > Upload), fill the `my_rating` column with a 1 to 10 for the clips you've judged, download it as a CSV, and run:
 
 ```bash
-clipper eval review.csv --good 7 --k 3
+clipper eval review.csv
 ```
 
-It reports how closely the model's ranking matches yours (Spearman rank correlation), how often its top
-picks are clips you rated well, and the breakdown per category. Change a prompt, re-run, rate, and compare:
-that is how you tell whether a change actually helped. Under about 20 rated clips the numbers are noisy, and
-the report says so. There is no direct Google Sheets sync: that needs a Google login set up in an API project,
-and the CSV import takes seconds.
+The report shows how closely the AI's ranking matches yours, how often its top picks are clips you rated well, and how it does in each category. Change a prompt, make new picks, rate them, and compare. That's how you tell whether a change actually helped. With fewer than about 20 rated clips the numbers are noisy, and the report says so.
 
-## Status and limits
+## What works today
 
-- **Tested (`pytest`):** config handling, the CLI, highlight selection, windowing and re-scoring against a real local OpenAI-compatible server, session writing, post copy, review/export/eval, the centered and blurred reframes, caption and hook stages on a synthetic video, and face-tracked reframing on a real face photo.
-- **Run on a real video:** one hour-long episode, end to end on a Mac, through `qwen-flash`. The windowing, the viral prompt and the re-scoring have only been exercised against a stand-in model, not a live one, so how well the new prompt picks is unmeasured until you rate some picks with `clipper eval`.
-- **Needs YouTube captions.** There is no speech-to-text fallback yet, so a video without a caption track fails. Word-by-word captions also come from YouTube's track.
-- **Clip length is fixed at about 60-120 s** (upstream's validator keeps only 58-120 s clips).
-- **Scores are the model's opinion.** They are only as good as their agreement with your ratings, which is what `clipper eval` measures.
-- **Cookies are your logged-in session.** Treat the file like a password.
-- Only clip footage you have the rights to use. YouTube's terms and copyright law apply.
+Checked by hand, on an Intel MacBook Air: setup, `doctor`, and one real episode taken from a YouTube link to a finished vertical clip, using `qwen-flash`.
+
+Covered by automated tests only, so not yet run on real videos with a live model: long-video windows and re-scoring, the `viral` prompt, titles and captions, export, the review sheet, and `eval`. The tests run against a small fake AI server and synthetic video, so they check the logic, not how good the AI's choices are. That's what `clipper eval` is for.
+
+Known gaps:
+
+- Videos need YouTube captions. There's no speech-to-text fallback yet.
+- Clip length is fixed at roughly one to two minutes.
+- Posting is manual. TikTok's API only allows private posts until an app is audited.
+- Only clip footage you have permission to use. YouTube's terms and copyright law apply to what you download and post.
 
 ## Troubleshooting
 
-**`Could not find a version that satisfies the requirement mediapipe` (`from versions: none`)**
-MediaPipe's current releases (1.x) publish macOS wheels for **Apple Silicon only**; the last
-release with Intel-Mac wheels is 0.10.21, for Python 3.9-3.12
-([PyPI files](https://pypi.org/project/mediapipe/#files)). So an Intel Mac, or a Python running under
-Rosetta, on Python 3.13+ has nothing to install. Check yours:
+Run `clipper doctor` first. Most problems show up there.
+
+**`clipper: command not found`**: activate the environment with `source .venv/bin/activate`.
+
+**`No subtitle available`**: the video has no captions, not even auto-generated ones. Try another video.
+
+**YouTube says 403 or the cookies are stale**: export a fresh `cookies.txt`.
+
+**ffmpeg is missing, or `brew install ffmpeg` runs for hours (Intel Macs)**: Homebrew has stopped building ready-made packages for Intel Macs, so it compiles everything from source ([discussion](https://github.com/orgs/Homebrew/discussions/7044)). A prebuilt ffmpeg binary works fine. Download one (evermeet.cx publishes Intel builds), put it in `~/bin`, and add that folder to your PATH. `clipper doctor` should then say ffmpeg has libass.
+
+**`pip` can't find `mediapipe` (Intel Macs)**: MediaPipe's current releases only ship Mac wheels for Apple Silicon, and the last release with Intel wheels covers Python 3.9 to 3.12 only ([PyPI files](https://pypi.org/project/mediapipe/#files)). `setup.sh` skips it, and CLIPPER uses a centered crop instead. For face tracking on an Intel Mac, make a fresh environment with Python 3.9 to 3.12 and run `pip install 'clipper[face]'`. On Debian or Ubuntu, face tracking also needs `sudo apt install libegl1 libgles2`.
+
+**`CERTIFICATE_VERIFY_FAILED`**: some Python installs on macOS ship without a list of trusted certificates. CLIPPER switches to the one from `certifi` automatically. If it still fails, something on your network (a work or school network, a VPN, or security software) may be intercepting HTTPS connections.
+
+**`AllocationQuota.FreeTierOnly` or "free quota has been exhausted"**: that's Alibaba refusing the request, not CLIPPER. It happens when a model's free allowance is used up and the "free quota only" switch is on, which stops Alibaba from billing you. Either turn the switch off for that model in the Alibaba console (their [docs](https://help.aliyun.com/en/model-studio/new-free-quota) say it can take about 30 minutes, and an account that isn't identity-verified has to verify and top up first), or use a model that still has free quota. Check prices before you switch to paying.
+
+**Trends come back empty**: run `clipper trends --refresh` to see why. Captions work without trends, so `CLIPPER_AUTO_TRENDS=0` is a fine answer.
+
+## Credits and license
+
+**CLIPPER is built on top of [yt-short-clipper](https://github.com/jipraks/yt-short-clipper) by Aji Prakoso (jipraks), MIT licensed.** Thank you to them for releasing it openly. This project wouldn't exist without it.
+
+The work is split like this:
+
+| Part | Files | Where it came from |
+|---|---|---|
+| Subtitles, word timings, downloading a section | `subtitle_*.py`, `json3_parser.py`, `video_processor.py` | yt-short-clipper (small edit) |
+| Picking highlights with the AI | `highlight_finder.py`, `prompts.py` | yt-short-clipper (one bug fixed) |
+| Vertical crop (face tracking or centered), captions, hook text, GPU encoder detection | `portrait.py`, `caption_generator.py`, `hook_generator.py`, `gpu.py` | yt-short-clipper (face tracking made optional) |
+| Small helpers: paths, constants, cookie check, subtitle parsing, watermark | `helpers.py`, `constants.py`, `cookies.py`, `srt_parser.py`, `watermark.py` | yt-short-clipper (one comment changed) |
+| Session flow and rendering | `session.py`, `clip_processor.py` | yt-short-clipper (long-video windows plugged in) |
+| Command line and settings | `cli.py`, `config.py` | added here |
+| Long-video windows and re-scoring | `windowing.py` | added here |
+| The `viral` prompt and profiles | `viral_prompt.py`, `profiles.py` | added here |
+| Titles, captions, hashtags, trends | `social.py`, `trends.py`, `trend_research.py`, `llm.py` | added here |
+| Review sheet, export, rating check | `review.py`, `export.py`, `evaluation.py` | added here |
+| Setup script, config, tests | `setup.sh`, `pyproject.toml`, `tests/` | added here |
+
+What was dropped from the original: its desktop app, the in-app wallet, the Repliz uploader, and the Windows packaging. [UPSTREAM.md](UPSTREAM.md) has the full list of what was kept, dropped and changed, including every edit made to the original code.
+
+One more thing for the record: the first commit in this repo imported a different MIT project, [Youtube-clipper-skill](https://github.com/op7418/Youtube-clipper-skill) by op7418, as a starting point. It was replaced by the yt-short-clipper pipeline in the next commit, and none of its code is in the current tree. It's only in the git history.
+
+**License:** MIT. The original copyright notice from yt-short-clipper is kept in [LICENSE](LICENSE), as the license requires.
+
+## Development
 
 ```bash
-python3 -c "import sys, platform; print(sys.version.split()[0], platform.machine())"
-```
-
-`x86_64` means Intel (or Rosetta); `arm64` means Apple Silicon. Current `setup.sh` no longer fails on this
-and runs without face tracking. To get face tracking on Intel, use Python 3.9-3.12 in a fresh venv
-(e.g. `brew install python@3.12`) and `pip install 'clipper[face]'`.
-
-## Tests
-
-```bash
+pip install -e ".[dev]"    # setup.sh already does this
 pytest
 ```
 
-The face-tracking tests are skipped when MediaPipe isn't installed.
+The tests run against a small fake AI server on your own machine, so they need no API key and spend nothing. The face-tracking tests are skipped when MediaPipe isn't installed. When it is, the first run downloads a 4 MB face model.

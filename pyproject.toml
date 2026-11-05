@@ -32,6 +32,9 @@ dependencies = [
 face = ["mediapipe>=0.10.0"]
 dev = ["pytest>=8"]
 
+[project.urls]
+Upstream = "https://github.com/jipraks/yt-short-clipper"
+
 [project.scripts]
 clipper = "clipper.cli:main"
 

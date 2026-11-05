@@ -46,7 +46,7 @@ TAG_CHARS = 30
 ITEM_CHARS = 80
 CACHE_VERSION = 1
 
-_PROMPT = """Today is {today}. Use web search to find what is trending on {platform} RIGHT NOW (this week){where}{about}.
+_PROMPT = """What is trending on {platform} this week (today is {today}){where}{about}? Search for recent articles, trend roundups and creator reports that list trending hashtags, caption formats and topics, not just individual videos.
 
 Report only what you actually found in the search results. Do not fill gaps from memory: your own knowledge of trends is out of date. If you cannot find current information, return empty lists.
 
@@ -273,6 +273,11 @@ def explain_empty(report: Report) -> list[str]:
     elif report.n_sources > 0 and report.proposed == 0:
         lines.append("The search returned pages, but the model found no trends in them.")
         lines += [f"   returned: {u}" for u in report.returned]
+        if any("/video/" in u for u in report.returned):
+            lines.append(
+                "A single video page has no text to read, so there is nothing to extract from it. Try a "
+                "broader niche (for example --niche 'TikTok entertainment'), or run this again later."
+            )
     elif report.n_sources > 0 and report.dropped >= report.proposed > 0:
         lines.append("Every item the model proposed cited a page that was not among the returned sources.")
         lines += [f"   cited:    {u}" for u in report.cited]
