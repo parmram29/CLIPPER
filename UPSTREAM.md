@@ -33,8 +33,8 @@ this repo, as the license requires.
 - `clipper/social.py`: title, three caption angles, hashtags, search keywords and a pinned comment per clip
   (replaces a generator that lived in upstream's dropped desktop-app glue, `sidecar.py`)
 - `clipper/trend_research.py`: researches what is trending with a web-search-enabled model, keeps only
-  items matched to the sources the search returned, cleans the text, and caches the result (TikTok has no
-  official trends feed)
+  items matched to the sources the search returned (when the route can return them), cleans the text, caches
+  the result, and backs off for a day after a failure (TikTok has no official trends feed)
 - `clipper/trends.py`: an optional user-written trends file, which takes priority over the research
 - `clipper/review.py`, `clipper/export.py`, `clipper/evaluation.py`: review sheet, export folder, and
   agreement between the model's scores and the user's ratings

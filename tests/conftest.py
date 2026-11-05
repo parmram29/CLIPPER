@@ -22,7 +22,8 @@ class _Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(error)
             return
-        refused = self.server.reject_keys & set(body)
+        native = self.path.endswith("/generation")  # Alibaba's native API, not the compatible one
+        refused = self.server.reject_keys & (set(body) | set(body.get("parameters") or {}))
         if refused:
             error = json.dumps({"error": {"message": f"unsupported parameter(s): {sorted(refused)}"}}).encode()
             self.send_response(400)
@@ -32,6 +33,17 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(error)
             return
         reply = self.server.reply_fn(body) if self.server.reply_fn else self.server.reply
+        if native:
+            output = {"choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": reply}}]}
+            if "search_info" in self.server.extra_response:
+                output["search_info"] = self.server.extra_response["search_info"]
+            data = json.dumps({"request_id": "r", "output": output, "usage": {"input_tokens": 11, "output_tokens": 22}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         payload = {
             "id": "chatcmpl-test",
             "object": "chat.completion",
