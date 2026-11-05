@@ -381,6 +381,17 @@ def _clear_failure(cache_file: Path) -> None:
 def _hint_for(exc: Exception) -> str:
     """What to do about a refused search, judged from the error text."""
     text = str(exc).lower()
+    if "freetieronly" in text:
+        return (
+            "Alibaba's 'Free quota only' switch is on for this model, so it refuses instead of billing you "
+            "(error AllocationQuota.FreeTierOnly). Per Alibaba's docs you can turn it off per model in the "
+            "Model Studio console (the free quota page's Actions column, or the model's details page; "
+            "Singapore region), and the change can take about 30 minutes. An account that is not "
+            "identity-verified has to verify and top up first, and the docs disagree on whether the switch "
+            "can be turned off before the free quota is fully used. If you do switch to pay-as-you-go, check "
+            "the price first. Otherwise use a model that still has free quota with "
+            "CLIPPER_SEARCH_MODEL=<model>, or your own list (`clipper trends --init`)."
+        )
     if "quota" in text or "payment" in text or "free tier" in text:
         return (
             "This is Alibaba's refusal, not CLIPPER's. It says the free quota for this model is used up and "
