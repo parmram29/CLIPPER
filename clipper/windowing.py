@@ -10,8 +10,11 @@ still take that path, unchanged. For long ones:
 3. drop duplicates (the same moment found by two windows);
 4. re-score every surviving candidate in ONE call, so a 7 from a dull window and a 7 from
    a lively one are comparable. Without this, each window's scores only make sense inside
-   that window;
-5. keep the best ``num_clips`` that do not overlap, in chronological order.
+   that window. With the drama check on (``drama_share``), that same call also judges how
+   much real drama each candidate has and how strong its first ten seconds are, and if too
+   few candidates are drama scenes the video is searched again for confrontations only;
+5. keep the best ``num_clips`` that do not overlap, in chronological order (drama scenes
+   first when the drama check is on).
 """
 
 from __future__ import annotations
@@ -21,9 +24,9 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
-from . import highlight_finder, llm
+from . import drama, highlight_finder, llm
 from .srt_parser import parse_timestamp
-from .viral_prompt import VIRALITY_RUBRIC
+from .viral_prompt import CATEGORIES, VIRALITY_RUBRIC
 
 LogFn = Callable[[str], None]
 
@@ -38,8 +41,14 @@ DUPLICATE_OVERLAP_FRACTION = 0.2
 EXCERPT_CHARS = 600
 # A pick shorter than the minimum clip length is widened to about this long (the prompt asks for 60-90 s).
 TARGET_CLIP_SECONDS = 72
-# Of the seconds added, this share goes before the pick (the set-up) and the rest after it (the fallout).
-LEAD_IN_SHARE = 0.35
+# At most this many seconds of the added time go BEFORE the pick; the rest goes after it. The pick starts
+# where the model put its hook, so a long lead-in would bury the opening under set-up (it did: 15 s).
+LEAD_IN_SECONDS = 3.0
+# With the drama check on, ask for more candidates (there must be enough drama to choose from) but
+# never more than a 30-minute window can hold, and give the judge more of each clip to read.
+DRAMA_CANDIDATE_FACTOR = 3
+MAX_CANDIDATES_PER_WINDOW = 12
+DRAMA_EXCERPT_CHARS = 900
 
 _LINE_RE = re.compile(
     r"^\[(\d{2,}:\d{2}:\d{2}[,.]\d{3}) - (\d{2,}:\d{2}:\d{2}[,.]\d{3})\]\s?(.*)$"
@@ -125,16 +134,16 @@ def fit_to_length(
     minimum: float = highlight_finder.MIN_CLIP_SECONDS,
     maximum: float = highlight_finder.MAX_CLIP_SECONDS,
     target: float = TARGET_CLIP_SECONDS,
-    lead_in_share: float = LEAD_IN_SHARE,
+    lead_in_seconds: float = LEAD_IN_SECONDS,
 ) -> tuple[float, float] | None:
     """Widen the pick ``start``-``end`` with the transcript around it, to about ``target`` seconds.
 
-    A third of the added time goes before the pick (the set-up) and the rest after it (the
-    fallout). Whatever would hang over the start or end of the video moves to the other side.
-    Both ends then snap outward to subtitle-line boundaries so no sentence is cut in half, and
-    the original moment always stays inside. Returns None when that cannot be done: no
-    transcript, a pick that lies outside it, a video shorter than ``minimum``, or a pick that is
-    already longer than ``maximum``.
+    At most ``lead_in_seconds`` of the added time goes before the pick, so the clip still opens
+    on the moment the model chose as its hook; the rest goes after it (the fallout). Whatever
+    would hang over the start or end of the video moves to the other side. Both ends then snap
+    outward to subtitle-line boundaries so no sentence is cut in half, and the original moment
+    always stays inside. Returns None when that cannot be done: no transcript, a pick that lies
+    outside it, a video shorter than ``minimum``, or a pick that is already longer than ``maximum``.
     """
     if not lines or end <= start:
         return None
@@ -147,8 +156,9 @@ def fit_to_length(
         return None
 
     extra = max(target, minimum) - duration
-    new_start = start - extra * lead_in_share
-    new_end = end + extra * (1 - lead_in_share)
+    before = min(lead_in_seconds, extra)
+    new_start = start - before
+    new_end = end + (extra - before)
     if new_start < floor:  # no room before the pick: take it after
         new_end += floor - new_start
         new_start = floor
@@ -204,10 +214,16 @@ def is_duplicate(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
     return overlap > DUPLICATE_OVERLAP_FRACTION * min(e1 - s1, e2 - s2)
 
 
+def _best_first(h: Mapping[str, Any]) -> tuple[float, float, float, float, float]:
+    """Sort key, best first: drama scenes, how dramatic, how strong the opening, then the generic
+    score (which alone decides when nothing was judged), then the earlier moment."""
+    return tuple(-x for x in drama.rank_key(h)) + (_span(h)[0],)  # type: ignore[return-value]
+
+
 def dedupe(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep the higher-scoring one of every pair of duplicates."""
+    """Keep the better one of every pair of duplicates (the more dramatic, else the higher-scoring)."""
     kept: list[dict[str, Any]] = []
-    for candidate in sorted(candidates, key=lambda h: (-_score(h), _span(h)[0])):
+    for candidate in sorted(candidates, key=_best_first):
         if not any(is_duplicate(candidate, other) for other in kept):
             kept.append(candidate)
     return kept
@@ -257,47 +273,151 @@ def _parse_scores(value: Any, count: int) -> dict[int, int]:
     return scores
 
 
+# The drama judge. It asks a narrow question of every candidate in one call, and says plainly that most
+# talk is calm, because the model that picked the clips had called calm dating talk "drama".
+_JUDGE_INTRO = (
+    "You are the editor of a viral reality-TV DRAMA account on TikTok. Below are candidate clips cut from "
+    "a long video. Judge each one honestly and strictly, on ONE shared scale, so clips from different "
+    "parts of the video can be ranked against each other. The question for every clip: would a stranger "
+    "scrolling past STOP for this?"
+)
+_JUDGE_RUBRIC = """\
+DRAMA (0-10): how much real conflict or shock is in the clip.
+* 0-2 calm: small talk, introductions, thanks, stating a preference or a plan, describing a type,
+  compliments, recaps, a plea to like or subscribe.
+* 3-5 mild: flirting, polite disagreement, an awkward pause, a complaint said calmly.
+* 6-7 drama: a real disagreement, an accusation or call-out, a put-down or insult, someone caught out
+  or lying, a pointed question nobody wants to answer, a clear shock, a punchline that really lands.
+* 8-10 fireworks: a shouting match, threats, a big confession or reveal, betrayal, someone storming
+  off, a line that makes you say "WHAT?!".
+Two people calmly talking about feelings, plans or what they want in a partner is a 1-3, however sweet.
+Most candidates should score between 2 and 6. Give 8 or more only when it is truly explosive.
+
+OPENING (0-3): judge ONLY the "opening" text, the first ten seconds of the clip.
+* 0 set-up, small talk or throat-clearing  * 1 something is brewing
+* 2 the conflict or the shocking line is already there  * 3 it starts mid-explosion
+
+CATEGORY: exactly one of: __CATEGORIES__. Use "other" for calm talk.
+
+VIRALITY (1-10): overall pull: how hard it grabs, how shareable it is, whether it ends on its payoff."""
+_JUDGE_FORMAT = (
+    '\n\nReturn ONLY a JSON array with one object per candidate: '
+    '[{"id":0,"drama":8,"opening":2,"virality_score":7,"category":"argument","why":"accusation, then a threat"}]. '
+    "Every id must appear exactly once. drama is 0-10, opening is 0-3, virality_score is 1-10, all whole "
+    "numbers; why is at most 10 words and has no double quotes. No prose and no markdown."
+)
+
+
+def _parse_judgements(value: Any, count: int) -> dict[int, dict[str, Any]]:
+    """Read the drama judge's reply: for each candidate id, whichever of drama, opening, virality_score,
+    category and why are usable. Anything unreadable is left out, and numbers are clamped to their range."""
+    if isinstance(value, dict):  # e.g. {"scores": [...]}
+        value = next((v for v in value.values() if isinstance(v, list)), [])
+    judged: dict[int, dict[str, Any]] = {}
+    for item in value if isinstance(value, list) else []:
+        try:
+            idx = int(item["id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not 0 <= idx < count:
+            continue
+        entry: dict[str, Any] = {}
+        for key, low, high in (("drama", 0, 10), ("opening", 0, 3), ("virality_score", 1, 10)):
+            try:
+                entry[key] = max(low, min(high, int(round(float(item[key])))))
+            except (KeyError, TypeError, ValueError):
+                pass
+        category = str(item.get("category", "")).strip().lower()
+        if category in CATEGORIES:
+            entry["category"] = category
+        why = " ".join(str(item.get("why") or "").replace('"', "'").split())[:90]
+        if why:
+            entry["why"] = why
+        if entry:
+            judged[idx] = entry
+    return judged
+
+
 def rerank_candidates(
     candidates: list[dict[str, Any]],
     lines: list[Line],
     ai: Mapping[str, Any],
     *,
     log: LogFn | None = None,
+    with_drama: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """Re-score every candidate in one call. On any failure, keep the existing scores."""
+    """Re-score every candidate in one call. On any failure, keep the existing scores.
+
+    With ``with_drama`` the same call also judges each candidate's drama (0-10) and the strength of
+    its first ten seconds (0-3), and re-labels its category; those land in ``drama_score``,
+    ``opening_score``, ``drama_why`` and ``category`` (the model's first label is kept as
+    ``category_first_pass``).
+    """
     log = log or (lambda m: None)
-    if len(candidates) < 2:
+    if len(candidates) < (1 if with_drama else 2):
         return candidates, dict(llm.ZERO_USAGE)
 
     entries = []
     for i, h in enumerate(candidates):
         start, end = _span(h)
-        entries.append(
+        head = (
             f"[{i}] {end - start:.0f}s | {h.get('category', '?')} | title: {h.get('title', '')} | "
-            f"hook: {h.get('hook_text', '')} | excerpt: {excerpt_for(lines, start, end)}"
+            f"hook: {h.get('hook_text', '')} | "
         )
-    prompt = (
-        _RERANK_INTRO + "\n\n" + VIRALITY_RUBRIC + "\n\nCANDIDATES:\n" + "\n".join(entries) + _RERANK_FORMAT
-    )
+        if with_drama:
+            opening = excerpt_for(lines, start, start + drama.OPENING_SECONDS, 240)
+            entries.append(head + f"opening: {opening} | excerpt: {excerpt_for(lines, start, end, DRAMA_EXCERPT_CHARS)}")
+        else:
+            entries.append(head + f"excerpt: {excerpt_for(lines, start, end)}")
 
+    if with_drama:
+        rubric = _JUDGE_RUBRIC.replace("__CATEGORIES__", ", ".join(CATEGORIES))
+        prompt = _JUDGE_INTRO + "\n\n" + rubric + "\n\nCANDIDATES:\n" + "\n".join(entries) + _JUDGE_FORMAT
+    else:
+        prompt = (
+            _RERANK_INTRO + "\n\n" + VIRALITY_RUBRIC + "\n\nCANDIDATES:\n" + "\n".join(entries) + _RERANK_FORMAT
+        )
+
+    judgements: dict[int, dict[str, Any]] = {}
     try:
-        text, usage = llm.chat(ai, prompt, temperature=0.2, max_tokens=60 * len(candidates) + 100)
-        scores = _parse_scores(llm.extract_json(text), len(candidates))
+        if with_drama:
+            text, usage = llm.chat(ai, prompt, temperature=0.1, max_tokens=110 * len(candidates) + 100)
+            judgements = _parse_judgements(llm.extract_json(text), len(candidates))
+            counted = sum(1 for j in judgements.values() if "drama" in j)
+        else:
+            text, usage = llm.chat(ai, prompt, temperature=0.2, max_tokens=60 * len(candidates) + 100)
+            scores = _parse_scores(llm.extract_json(text), len(candidates))
+            counted = len(scores)
     except Exception as exc:  # noqa: BLE001 - a failed re-score must not lose the picks
         log(f"Cross-window re-scoring failed ({str(exc)[:160]}); keeping per-window scores")
         return candidates, dict(llm.ZERO_USAGE)
 
-    if len(scores) * 2 < len(candidates):
-        log(f"Re-scoring returned scores for only {len(scores)}/{len(candidates)} candidates; keeping per-window scores")
+    if counted * 2 < len(candidates):
+        log(f"Re-scoring returned scores for only {counted}/{len(candidates)} candidates; keeping per-window scores")
         return candidates, usage
 
     rescored = []
     for i, h in enumerate(candidates):
         copy = dict(h)
-        if i in scores:
+        if with_drama:
+            judged = judgements.get(i, {})
+            if "virality_score" in judged:
+                copy["virality_score"] = judged["virality_score"]
+            if "drama" in judged:
+                copy["drama_score"] = judged["drama"]
+            if "opening" in judged:
+                copy["opening_score"] = judged["opening"]
+            if "why" in judged:
+                copy["drama_why"] = judged["why"]
+            if "category" in judged:
+                if judged["category"] != copy.get("category"):
+                    copy["category_first_pass"] = copy.get("category")
+                copy["category"] = judged["category"]
+        elif i in scores:
             copy["virality_score"] = scores[i]
         rescored.append(copy)
-    log(f"Re-scored {len(scores)} candidates on one shared scale")
+    suffix = ", with drama and opening judged" if with_drama else ""
+    log(f"Re-scored {counted} candidates on one shared scale{suffix}")
     return rescored, usage
 
 
@@ -322,9 +442,18 @@ def find_highlights_windowed(
     window_seconds: float = DEFAULT_WINDOW_SECONDS,
     overlap_seconds: float = DEFAULT_OVERLAP_SECONDS,
     rerank: bool = True,
+    drama_share: float | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """Drop-in for ``highlight_finder.find_highlights`` that handles long videos."""
+    """Drop-in for ``highlight_finder.find_highlights`` that handles long videos.
+
+    ``drama_share`` turns the drama check on (0.75 means 6 of every 8 clips must be drama scenes):
+    every candidate is judged for drama and for how strong its first ten seconds are, drama scenes
+    are chosen first, and if the first look finds too few, the video is searched again for
+    confrontations only. Leave it None for the plain behaviour (the ``podcast`` profile, your own
+    prompt, or ``--drama-share 0``). A direction you give yourself is never overridden.
+    """
     log = log or (lambda m: None)
+    drama_on = drama_share is not None
     common = dict(
         api_key=api_key,
         base_url=base_url,
@@ -336,44 +465,60 @@ def find_highlights_windowed(
         log=log,
         fit_length=length_fitter(transcript),  # built from the whole video, not one window
     )
+    if drama_on:
+        common["keep_all"] = True  # rank every valid candidate instead of cutting at the model's own order
 
     windows = split_transcript(transcript, window_seconds, overlap_seconds)
-    if len(windows) == 1:
+    if len(windows) == 1 and not drama_on:
         return highlight_finder.find_highlights(
             transcript=transcript, video_info=dict(video_info or {}), num_clips=num_clips, **common
         )
 
-    per_window = max(2, math.ceil(num_clips * CANDIDATE_FACTOR / len(windows)))
-    log(
-        f"Long video: {len(windows)} windows of ~{window_seconds / 60:.0f} min "
-        f"({overlap_seconds / 60:.0f} min overlap), up to {per_window} candidates each"
-    )
+    factor = DRAMA_CANDIDATE_FACTOR if drama_on else CANDIDATE_FACTOR
+    per_window = max(2, math.ceil(num_clips * factor / len(windows)))
+    if drama_on:
+        per_window = min(per_window, MAX_CANDIDATES_PER_WINDOW)
+    if len(windows) > 1:
+        log(
+            f"Long video: {len(windows)} windows of ~{window_seconds / 60:.0f} min "
+            f"({overlap_seconds / 60:.0f} min overlap), up to {per_window} candidates each"
+        )
 
     usage = dict(llm.ZERO_USAGE)
-    pool: list[dict[str, Any]] = []
     last_error: Exception | None = None
-    for window in windows:
-        label = f"{window.index + 1}/{len(windows)}"
-        log(f"Window {label}: {clock(window.start)} to {clock(window.end)}")
-        info = dict(video_info or {})
-        info["description"] = (
-            f"[This is part {label} of a longer video, covering {clock(window.start)} to "
-            f"{clock(window.end)}. Timestamps are absolute.] {info.get('description') or ''}"
-        ).strip()
-        try:
-            found, window_usage = highlight_finder.find_highlights(
-                transcript=window.text, video_info=info, num_clips=per_window, **common
-            )
-        except RuntimeError as exc:
-            last_error = exc
-            log(f"Window {label} failed ({str(exc)[:160]}); continuing with the other windows")
-            continue
-        llm.add_usage(usage, window_usage)
-        for h in found:
-            h["window"] = window.index
-            h["window_score"] = h.get("virality_score")
-            pool.append(h)
 
+    def collect(direction: str | None, note: str = "") -> list[dict[str, Any]]:
+        """Ask every window for candidates (``direction`` replaces the user's, for the second look)."""
+        nonlocal last_error
+        found_all: list[dict[str, Any]] = []
+        options = dict(common)
+        if direction is not None:
+            options["user_direction"] = direction
+        for window in windows:
+            label = f"{window.index + 1}/{len(windows)}"
+            info = dict(video_info or {})
+            if len(windows) > 1:
+                log(f"Window {label}: {clock(window.start)} to {clock(window.end)}{note}")
+                info["description"] = (
+                    f"[This is part {label} of a longer video, covering {clock(window.start)} to "
+                    f"{clock(window.end)}. Timestamps are absolute.] {info.get('description') or ''}"
+                ).strip()
+            try:
+                found, window_usage = highlight_finder.find_highlights(
+                    transcript=window.text, video_info=info, num_clips=per_window, **options
+                )
+            except RuntimeError as exc:
+                last_error = exc
+                log(f"Window {label} failed ({str(exc)[:160]}); continuing with the other windows")
+                continue
+            llm.add_usage(usage, window_usage)
+            for h in found:
+                h["window"] = window.index
+                h["window_score"] = h.get("virality_score")
+                found_all.append(h)
+        return found_all
+
+    pool = collect(None)
     if not pool:
         raise RuntimeError(
             "No valid highlights found in any window."
@@ -381,12 +526,31 @@ def find_highlights_windowed(
         )
 
     pool = dedupe(pool)
-    if rerank and len(pool) > 1:
-        pool, rerank_usage = rerank_candidates(
-            pool, parse_lines(transcript), {"api_key": api_key, "base_url": base_url, "model": model}, log=log
-        )
+    lines = parse_lines(transcript)
+    ai = {"api_key": api_key, "base_url": base_url, "model": model}
+    if drama_on:
+        pool, judge_usage = rerank_candidates(pool, lines, ai, log=log, with_drama=True)
+        llm.add_usage(usage, judge_usage)
+        needed = drama.required_count(num_clips, drama_share)
+        have = sum(1 for h in pool if drama.is_drama(h))
+        if any(drama.is_judged(h) for h in pool) and have < needed and not (user_direction or "").strip():
+            log(f"Only {have} drama scene(s) so far and {needed} are needed; looking again for confrontations only")
+            again = dedupe(collect(drama.DRAMA_DIRECTION, " (confrontations only)"))
+            fresh = [h for h in again if not any(is_duplicate(h, other) for other in pool)]
+            if fresh:
+                fresh, judge_usage = rerank_candidates(fresh, lines, ai, log=log, with_drama=True)
+                llm.add_usage(usage, judge_usage)
+                pool = dedupe(pool + fresh)
+    elif rerank and len(pool) > 1:
+        pool, rerank_usage = rerank_candidates(pool, lines, ai, log=log)
         llm.add_usage(usage, rerank_usage)
 
     selected = select_best(pool, num_clips)
     log(f"Kept {len(selected)} of {len(pool)} candidates")
+    if drama_on:
+        report = drama.check(selected, drama_share)
+        log(
+            f"Drama check: {report.drama_count} of {report.total} picks are drama scenes "
+            f"({report.required} needed): {'PASS' if report.passed else 'FAIL'}"
+        )
     return selected, usage

@@ -236,7 +236,10 @@ def test_find_on_a_long_video_uses_windows_the_viral_prompt_and_saves_the_catego
     _ai_env(monkeypatch, fake_llm)
     fake_llm.reply_fn = windowed_reply()
 
-    code = cli.main(["find", "https://youtu.be/long", "--clips", "3", "--cookies", str(cookies_file), "--out", str(tmp_path / "out")])
+    # --drama-share 0: this test is about windows, the prompt and the saved categories, so it runs the
+    # plain pipeline (the drama check, on by default for this profile, has its own tests)
+    code = cli.main(["find", "https://youtu.be/long", "--clips", "3", "--cookies", str(cookies_file),
+                     "--out", str(tmp_path / "out"), "--drama-share", "0"])
     assert code == 0
 
     prompts = [r["body"]["messages"][0]["content"] for r in fake_llm.requests]
@@ -263,7 +266,7 @@ def test_no_rerank_and_window_flags_reach_the_session(tmp_path, fake_llm, cookie
     fake_llm.reply_fn = windowed_reply()
 
     cli.main(["find", "https://youtu.be/long", "--clips", "3", "--cookies", str(cookies_file), "--out", str(tmp_path / "o"),
-              "--window-minutes", "50", "--overlap-minutes", "5", "--no-rerank"])
+              "--window-minutes", "50", "--overlap-minutes", "5", "--no-rerank", "--drama-share", "0"])
     # 100 min in 50-minute windows with 5 minutes of overlap -> 3 windows, and no re-scoring call
     assert len(fake_llm.requests) == 3
     assert all("CANDIDATES:" not in r["body"]["messages"][0]["content"] for r in fake_llm.requests)

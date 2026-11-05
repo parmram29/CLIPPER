@@ -84,6 +84,7 @@ That finds highlights, renders the best three, writes their captions and hashtag
 | `clipper run URL` | `find` and `process` in one go. |
 | `clipper social SESSION` | Writes (or rewrites) titles, captions and hashtags. |
 | `clipper export SESSION` | Copies finished clips into one folder. |
+| `clipper check SESSION` | Checks that most of the picks are drama scenes (6 of 8 by default). Add `--rejudge` to score picks you already have. Exit status 1 if it fails. |
 | `clipper review SESSION` | Writes a spreadsheet so you can rate the picks. |
 | `clipper eval review.csv` | Compares your ratings with the AI's scores. |
 | `clipper trends` | Shows or refreshes the trend list that captions use. `--diagnose` tests web search step by step. |
@@ -99,7 +100,7 @@ Options you'll probably want:
 
 ## How it picks clips
 
-The default profile, `viral`, looks for the moments people watch twice and send to a friend: drama and beef, arguments, scandal and secrets, wild stories, WTF moments, funny punchlines, roasts, spicy-but-appropriate moments (flirting, innuendo, getting caught, never explicit), strong emotion, hot takes, and cliffhangers. It steers clear of slurs aimed at groups, graphic violence, explicit sexual content, and private information.
+The default profile, `viral`, looks for the moments that stop a thumb: drama and beef, arguments, scandal and secrets, wild stories, WTF moments, funny punchlines, roasts and insults, spicy-but-appropriate moments (innuendo, getting caught, never explicit), and cliffhangers. Every clip has to contain a confrontation, an accusation or insult, someone being caught out, a shocking reveal, a WTF moment, or a punchline that lands, and it has to open on that line. Two people calmly talking about feelings or what they want in a partner is not a clip, however sweet. It steers clear of slurs aimed at groups, graphic violence, explicit sexual content, and private information.
 
 Every pick gets a 1 to 10 score from a fixed rubric (hook, intensity, surprise, shareability, clean ending) and a category. The score is the AI's opinion. [Rating the picks](#rating-the-picks) shows how to find out whether its taste matches yours.
 
@@ -107,11 +108,26 @@ Every pick gets a 1 to 10 score from a fixed rubric (hook, intensity, surprise, 
 
 Clips come out around one to two minutes long. The original project only keeps picks of 58 to 120 seconds, and a few seconds of padding get added around each.
 
-The AI is told to return 60 to 120 seconds, but smaller models often hand back just the moment itself, 10 to 40 seconds. On the first real episode it was tried on, all 21 picks were that short, and the run ended with "No valid highlights found". So CLIPPER now widens a short pick with the conversation around it, to roughly 70 to 80 seconds: about a third of the added time goes before the moment (the set-up) and the rest after it (the fallout), and both ends snap to the edge of a subtitle line so no sentence is cut in half. The log says `Widened ...` for each one, and the AI's original times are kept in the session data as `model_start_time` and `model_end_time`. A time range you ask for yourself with `--direction` is never widened, and a pick that is too long is still skipped.
+The AI is told to return 60 to 120 seconds, but smaller models often hand back just the moment itself, 10 to 40 seconds. On the first real episode it was tried on, all 21 picks were that short, and the run ended with "No valid highlights found". So CLIPPER now widens a short pick with the conversation around it, to roughly 70 to 80 seconds: at most 3 seconds go before the moment and the rest after it (the fallout), so the clip still opens on the line the AI chose as its hook, and both ends snap to the edge of a subtitle line so no sentence is cut in half. (An earlier version put about 15 seconds of set-up in front, which buried the opening.) The log says `Widened ...` for each one, and the AI's original times are kept in the session data as `model_start_time` and `model_end_time`. A time range you ask for yourself with `--direction` is never widened, and a pick that is too long is still skipped.
+
+### The drama check: 6 of every 8 clips
+
+This account is about drama, so "mostly drama" is a requirement, not a hope. Of the clips CLIPPER keeps, **at least 75% (6 of 8) must be drama scenes**. The rest may be anything, unless you say otherwise.
+
+The AI that picks the clips also labels them, and on the first real episode it called calm dating talk "drama" (and one pick was a plea to subscribe). So the label is not trusted. Instead:
+
+1. **A separate judgement.** One extra AI call scores every candidate for drama (0 to 10) and for how strong its first ten seconds are (0 to 3), with a prompt that says plainly that most talk is calm. A pick counts as a drama scene at 6 or more.
+2. **Drama comes first.** The candidates are ranked drama scenes first, then by how dramatic and how strong the opening is. All candidates are ranked, not just the first few the AI happened to list. `--top` uses the same order.
+3. **A second look.** If the first pass finds too few drama scenes, CLIPPER searches the video again asking only for confrontations, accusations, insults, reveals and WTF moments, and judges those too. (It doesn't do this if you gave your own `--direction`.)
+4. **The check.** `clipper find` and `clipper run` print a report: how many picks are drama scenes, the score and category of each, which ones fall short, and which have a flat opening. `clipper check SESSION` prints it again and exits with status 1 if the bar isn't met. A pick that was never judged counts as not drama, so the check can't pass on the AI's own say-so.
+
+Change the bar with `--drama-share 6/8`, `75%` or `0.75` (or `CLIPPER_DRAMA_SHARE` in `.env`): `1.0` means all drama, `0.5` allows a mixed account, `0` turns the whole thing off. `clipper check SESSION --rejudge` scores picks you already have and saves the scores. The check is on by default for the `viral` profile only; `--profile podcast` and your own `--prompt-file` don't get it unless you ask.
+
+What this can and can't promise: the tests prove the rules (the bar, the ranking, the second look, the report). Whether the AI's taste in drama matches yours is something only the report and your own eyes can say, so look at the report, and rate a few clips with [`clipper review`](#rating-the-picks).
 
 ## Long videos and streams
 
-A video longer than about 37 minutes isn't sent to the model in one piece. CLIPPER splits the transcript into overlapping 30-minute windows (`--window-minutes` and `--overlap-minutes` change that), asks for candidates in each window, and drops duplicates of the same moment. Then one last call scores all the survivors together, so a 7 from a quiet stretch means the same thing as a 7 from a busy one. `--no-rerank` skips that last call. Shorter videos go through in a single call, like the original.
+A video longer than about 37 minutes isn't sent to the model in one piece. CLIPPER splits the transcript into overlapping 30-minute windows (`--window-minutes` and `--overlap-minutes` change that), asks for candidates in each window, and drops duplicates of the same moment. Then one last call scores all the survivors together, so a 7 from a quiet stretch means the same thing as a 7 from a busy one. `--no-rerank` skips that last call (it is ignored while the drama check is on, because that call is also what judges the drama). With the drama check off, shorter videos go through in a single call, like the original.
 
 ## Captions, hashtags and trends
 
@@ -212,7 +228,7 @@ The work is split like this:
 | Session flow and rendering | `session.py`, `clip_processor.py` | yt-short-clipper (long-video windows plugged in) |
 | Command line and settings | `cli.py`, `config.py`, `diagnostics.py` | added here |
 | Long-video windows and re-scoring | `windowing.py` | added here |
-| The `viral` prompt and profiles | `viral_prompt.py`, `profiles.py` | added here |
+| The `viral` prompt, profiles and the drama check | `viral_prompt.py`, `profiles.py`, `drama.py` | added here |
 | Titles, captions, hashtags, trends | `social.py`, `trends.py`, `trend_research.py`, `llm.py` | added here |
 | Review sheet, export, rating check | `review.py`, `export.py`, `evaluation.py` | added here |
 | Setup script, config, pinned dependencies, tests | `setup.sh`, `pyproject.toml`, `requirements.txt`, `tests/` | added here |

@@ -162,3 +162,38 @@ def test_window_options_are_converted_and_validated():
 def test_unknown_profiles_are_rejected_by_the_parser():
     with pytest.raises(SystemExit):
         _find_args("--profile", "nonsense")
+
+
+# --- the viral prompt must ask for conflict and an opening that is already the drama -----------------------------
+# (the first real run came back with calm dating talk, and one pick was a plea to subscribe)
+
+
+def test_the_viral_prompt_makes_conflict_or_shock_a_requirement_for_every_clip():
+    assert "THE STOP-THE-THUMB TEST (NON-NEGOTIABLE)" in VIRAL_HIGHLIGHT_PROMPT
+    for required in ("a confrontation, argument or call-out", "an accusation, an insult or a put-down",
+                     "someone caught out, exposed or lying", "a shocking confession or reveal",
+                     "a punchline or savage comeback that really lands"):
+        assert required in VIRAL_HIGHLIGHT_PROMPT, required
+
+
+def test_the_viral_prompt_says_calm_talk_is_not_a_clip_however_sweet():
+    assert "is NOT a clip, however sweet or emotional it sounds" in VIRAL_HIGHLIGHT_PROMPT
+    assert "Calm relationship talk: compliments, preferences" in VIRAL_HIGHLIGHT_PROMPT
+    assert "never with filler" in VIRAL_HIGHLIGHT_PROMPT
+
+
+def test_the_viral_prompt_asks_for_an_opening_that_is_already_the_hot_line():
+    assert "OPEN ON THE HOT LINE" in VIRAL_HIGHLIGHT_PROMPT
+    assert "hook_text must be that opening line" in VIRAL_HIGHLIGHT_PROMPT
+    assert "Every clip passes the stop-the-thumb test and opens on its hottest line" in VIRAL_HIGHLIGHT_PROMPT
+
+
+def test_the_viral_prompt_no_longer_offers_plain_flirting_or_tears_as_things_to_hunt_for():
+    assert "SPICY but appropriate: flirting" not in VIRAL_HIGHLIGHT_PROMPT
+    assert "only\n   when something happens" in VIRAL_HIGHLIGHT_PROMPT  # spicy needs an event
+    assert "Tears alone, with no conflict, are not enough" in VIRAL_HIGHLIGHT_PROMPT
+    assert "heartfelt confessions" not in VIRAL_HIGHLIGHT_PROMPT
+
+
+def test_the_podcast_prompt_is_untouched_by_all_of_this():
+    assert "STOP-THE-THUMB" not in DEFAULT_HIGHLIGHT_PROMPT

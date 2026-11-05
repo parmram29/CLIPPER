@@ -32,11 +32,25 @@ def _stamp(seconds):
 # --- fit_to_length ------------------------------------------------------------------------------------
 
 
-def test_a_short_pick_in_the_middle_gets_set_up_before_and_fallout_after():
+def test_a_short_pick_in_the_middle_opens_on_the_moment_and_takes_the_rest_as_fallout():
     result = windowing.fit_to_length(_lines(), 300, 330)
-    assert result == (285, 359)  # 15 s before, 29 s after: about a third / two thirds of the 42 s added
+    # 3 s of lead-in, snapped out to the subtitle line at 295, and the other 39 s after the moment.
+    # (It used to be 15 s before, which buried every opening under set-up.)
+    assert result == (295, 369)
     start, end = result
     assert MIN <= end - start <= MAX and start <= 300 and end >= 330
+
+
+def test_the_clip_never_opens_more_than_a_lead_in_and_one_subtitle_line_before_the_moment():
+    lines = _lines()  # subtitle lines every 5 s; the video ends at 599, so picks past ~520 have no room after
+    checked = 0
+    for start in range(40, 520, 7):
+        for length in (8, 15, 30, 45, 57):
+            new_start, new_end = windowing.fit_to_length(lines, start, start + length)
+            assert start - new_start <= windowing.LEAD_IN_SECONDS + 5, (start, length, new_start)
+            assert new_end - (start + length) >= 0
+            checked += 1
+    assert checked > 300
 
 
 def test_both_ends_land_on_subtitle_line_boundaries():

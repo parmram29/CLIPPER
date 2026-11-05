@@ -28,7 +28,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from . import config, diagnostics, profiles
+from . import config, diagnostics, drama, profiles
 from .windowing import DEFAULT_OVERLAP_SECONDS, DEFAULT_WINDOW_SECONDS
 
 DEFAULT_OUT = "out"
@@ -91,10 +91,16 @@ def _score(highlight: Mapping[str, Any]) -> float:
 
 
 def top_indices(highlights: list[Mapping[str, Any]], n: int) -> list[int]:
-    """Indices of the ``n`` highest-scoring highlights, best first (ties keep order)."""
+    """Indices of the ``n`` best highlights, best first (ties keep order).
+
+    Picks judged to be drama scenes come first, then by how dramatic and how strong their opening
+    is (see drama.py); picks that were never judged rank on their score alone.
+    """
     if n < 1:
         raise ValueError("--top must be at least 1")
-    order = sorted(range(len(highlights)), key=lambda i: (-_score(highlights[i]), i))
+    order = sorted(
+        range(len(highlights)), key=lambda i: (tuple(-x for x in drama.rank_key(highlights[i])), i)
+    )
     return order[:n]
 
 
@@ -211,8 +217,10 @@ def load_prompt_file(path: str | Path) -> str:
 def format_highlights(highlights: list[Mapping[str, Any]]) -> str:
     lines = []
     for i, h in enumerate(highlights, 1):
+        judged = drama.drama_score(h)
+        drama_note = "" if judged is None else f" drama {judged}"
         lines.append(
-            f"{i:>2}. [{h.get('virality_score', '?')}/10] "
+            f"{i:>2}. [{h.get('virality_score', '?')}/10{drama_note}] "
             f"{h.get('start_time', '?')} -> {h.get('end_time', '?')} "
             f"({h.get('duration_seconds', '?')}s)  {h.get('title', 'Untitled')}"
         )
@@ -259,7 +267,33 @@ def prompt_and_window_settings(args: argparse.Namespace) -> dict[str, Any]:
         "window_seconds": args.window_minutes * 60,
         "overlap_seconds": args.overlap_minutes * 60,
         "rerank": not args.no_rerank,
+        "drama_share": resolve_drama_share(args),
     }
+
+
+DRAMA_SHARE_HELP = (
+    "how many of the kept clips must be drama scenes: 6/8, 75%% or 0.75 (default 75%%, so 6 of 8, for the "
+    "viral profile; also $CLIPPER_DRAMA_SHARE). The rest may be anything. 0 turns the drama check off"
+)
+
+
+def resolve_drama_share(args: argparse.Namespace, env: Mapping[str, str] | None = None) -> float | None:
+    """The share of kept clips that must be drama scenes, or None when the drama check is off.
+
+    On by default (75%, so 6 of 8) for the ``viral`` profile with its own prompt, because that is
+    what this account is for. ``--drama-share`` or $CLIPPER_DRAMA_SHARE turns it on elsewhere, sets
+    a different bar (6/8, 75% or 0.75), or switches it off with 0.
+    """
+    env = os.environ if env is None else env
+    raw = getattr(args, "drama_share", None)
+    if raw is None or str(raw).strip() == "":
+        raw = (env.get("CLIPPER_DRAMA_SHARE") or "").strip() or None
+    if raw is None:
+        own_viral_prompt = (
+            getattr(args, "profile", profiles.DEFAULT_PROFILE) == "viral" and not getattr(args, "prompt_file", None)
+        )
+        return drama.DEFAULT_SHARE if own_viral_prompt else None
+    return drama.parse_share(raw) or None
 
 
 def _find(args: argparse.Namespace) -> dict[str, Any]:
@@ -282,6 +316,9 @@ def _find(args: argparse.Namespace) -> dict[str, Any]:
     )
     print("\nHighlights:")
     print(format_highlights(session["highlights"]))
+    share = ai.get("drama_share")
+    if share is not None:
+        print("\n" + drama.format_report(drama.check(session["highlights"], share)))
     return session
 
 
@@ -760,6 +797,44 @@ def _print_report(report: Any) -> None:
               "your own list with `clipper trends --init`.")
 
 
+def _rejudge(session_dir: str | Path, session: dict[str, Any]) -> list[dict[str, Any]]:
+    """Score a session's saved picks with the separate drama judgement and save the scores.
+
+    One AI call. It reads the subtitle file the session kept, or else the text saved with each pick.
+    """
+    from . import windowing
+    from .srt_parser import parse_srt
+
+    picks = [dict(h) for h in session.get("highlights") or []]
+    ai = config.load_ai_config().as_dict()
+    lines: list[Any] = []
+    srt_files = sorted((Path(session_dir) / "_temp").glob("source.*.srt"))
+    if srt_files:
+        lines = windowing.parse_lines(parse_srt(str(srt_files[0])))
+    if not lines:  # no subtitle file kept: the text saved with each pick is all there is
+        for h in picks:
+            start, end = windowing._span(h)
+            text = " ".join(str(h.get("transcript_text") or "").split())
+            lines.append(windowing.Line(start, end, text, text))
+    judged, _ = windowing.rerank_candidates(picks, lines, ai, log=_log, with_drama=True)
+    session["highlights"] = judged
+    (Path(session_dir) / "session_data.json").write_text(
+        json.dumps(session, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    _log("Saved the scores to session_data.json (clipper process --top now picks the most dramatic first).")
+    return judged
+
+
+def _cmd_check(args: argparse.Namespace) -> int:
+    session = load_session(args.session_dir)
+    raw = args.drama_share or os.environ.get("CLIPPER_DRAMA_SHARE")
+    share = drama.parse_share(raw) if raw else drama.DEFAULT_SHARE
+    highlights = _rejudge(args.session_dir, session) if args.rejudge else session.get("highlights") or []
+    report = drama.check(highlights, share)
+    print(drama.format_report(report))
+    return 0 if report.passed else 1
+
+
 def _cmd_review(args: argparse.Namespace) -> int:
     from . import review
 
@@ -1040,8 +1115,10 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument(
             "--no-rerank",
             action="store_true",
-            help="skip the final call that re-scores all windows' picks on one shared scale",
+            help="skip the final call that re-scores all windows' picks on one shared scale "
+            "(ignored while the drama check is on, because that call is what judges the drama)",
         )
+        sp.add_argument("--drama-share", metavar="SHARE", help=DRAMA_SHARE_HELP)
         sp.add_argument("--out", default=DEFAULT_OUT, help=f"output folder (default ./{DEFAULT_OUT})")
         add_cookies(sp)
 
@@ -1125,6 +1202,19 @@ def build_parser() -> argparse.ArgumentParser:
     trends.add_argument("--region", help="where your audience is (default: $CLIPPER_REGION)")
     trends.add_argument("--file", metavar="FILE", help="your own file (default: $CLIPPER_TRENDS, then ./trends.txt)")
     trends.set_defaults(func=_cmd_trends)
+
+    check = sub.add_parser(
+        "check",
+        help="check that most of a session's picks are drama scenes (6 of 8 by default); exit status 1 if not",
+    )
+    check.add_argument("session_dir")
+    check.add_argument("--drama-share", metavar="SHARE", help=DRAMA_SHARE_HELP)
+    check.add_argument(
+        "--rejudge",
+        action="store_true",
+        help="score the saved picks with the separate drama judgement first (one AI call) and save the scores",
+    )
+    check.set_defaults(func=_cmd_check)
 
     review = sub.add_parser("review", help="write a review sheet (CSV) to rate the picks")
     review.add_argument("session_dir")
