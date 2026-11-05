@@ -375,6 +375,15 @@ def search_ai_config(env: Mapping[str, str] | None = None) -> dict[str, str] | N
     return ai
 
 
+def search_api(env: Mapping[str, str] | None = None) -> str:
+    """Which route to use for web search: ``compat`` (default) or Alibaba's native ``dashscope``."""
+    env = os.environ if env is None else env
+    value = (env.get("CLIPPER_SEARCH_API") or "compat").strip().lower() or "compat"
+    if value not in ("compat", "dashscope"):
+        raise config.ConfigError(f"CLIPPER_SEARCH_API must be 'compat' or 'dashscope', not {value!r}")
+    return value
+
+
 def load_trends_for_run(
     cli_value: str | None,
     env: Mapping[str, str] | None = None,
@@ -411,7 +420,12 @@ def load_trends_for_run(
         ai = search_ai_config(env)
         if ai:
             found = trend_research.auto_trends(
-                ai, niche=niche, region=resolve_region(region, env), force=refresh, log=_log
+                ai,
+                niche=niche,
+                region=resolve_region(region, env),
+                force=refresh,
+                log=_log,
+                api=search_api(env),
             )
             _log(trends_mod.describe(found))
             return found
@@ -574,7 +588,7 @@ def _cmd_trends(args: argparse.Namespace) -> int:
         ai = search_ai_config()
         if ai is None:
             raise config.ConfigError("No API key configured. Set CLIPPER_API_KEY in .env to research trends.")
-        trend_research.auto_trends(ai, niche=niche, region=region, force=True, log=_log)
+        trend_research.auto_trends(ai, niche=niche, region=region, force=True, log=_log, api=search_api())
     report = trend_research.load_cache(cache_file)
     if report is None:
         print(trends_mod.describe(None, path))

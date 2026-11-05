@@ -102,7 +102,18 @@ def extract_search_sources(node: Any) -> list[dict[str, Any]]:
     return found
 
 
-def chat_with_search(
+NATIVE_PATH = "/api/v1/services/aigc/text-generation/generation"
+
+
+def native_search_url(base_url: str) -> str:
+    """Alibaba's native text-generation endpoint on the same host as the compatible-mode URL."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(base_url)
+    return f"{parsed.scheme}://{parsed.netloc}{NATIVE_PATH}"
+
+
+def chat_with_search_native(
     ai: Mapping[str, Any],
     user: str,
     *,
@@ -112,15 +123,100 @@ def chat_with_search(
     timeout: float = 180.0,
     info: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, int], list[dict[str, Any]]]:
+    """The same search call through Alibaba's NATIVE API, which (unlike the OpenAI-compatible
+    endpoint) can return the sources it used, as ``output.search_info.search_results``.
+
+    Request and reply shapes follow Alibaba's published description of this API. Like the
+    compatible-mode call it tries the options form first and the plain switch second.
+    """
+    import urllib.error
+    import urllib.request
+
+    url = native_search_url(str(ai.get("base_url", "")))
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": user})
+
+    data: dict[str, Any] | None = None
+    last_error: Exception | None = None
+    for extra in _SEARCH_ATTEMPTS:
+        body = {
+            "model": ai["model"],
+            "input": {"messages": messages},
+            "parameters": {
+                "result_format": "message",
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                **extra,
+            },
+        }
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Authorization": f"Bearer {ai['api_key']}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            if info is not None:
+                info["request"] = "native API: enable_search" + (" + options" if "search_options" in extra else " only")
+            break
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[:300]
+            last_error = RuntimeError(f"HTTP {exc.code}: {detail}")
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            last_error = exc
+    if data is None:
+        raise SearchUnavailable(f"native web search request failed: {str(last_error)[:300]}") from last_error
+
+    output = data.get("output") or {}
+    choices = output.get("choices") or []
+    content = ""
+    if choices:
+        content = str((choices[0].get("message") or {}).get("content") or "").strip()
+    content = content or str(output.get("text") or "").strip()
+    if not content:
+        raise SearchUnavailable("the native search reply was empty")
+    usage = data.get("usage") or {}
+    return (
+        content,
+        {
+            "prompt_tokens": int(usage.get("input_tokens", 0) or 0),
+            "completion_tokens": int(usage.get("output_tokens", 0) or 0),
+        },
+        extract_search_sources(output),
+    )
+
+
+def chat_with_search(
+    ai: Mapping[str, Any],
+    user: str,
+    *,
+    system: str | None = None,
+    temperature: float = 0.2,
+    max_tokens: int = 1500,
+    timeout: float = 180.0,
+    info: dict[str, Any] | None = None,
+    api: str = "compat",
+) -> tuple[str, dict[str, int], list[dict[str, Any]]]:
     """A chat call with the provider's web search switched on.
 
     Returns ``(text, usage, sources)``. ``sources`` is empty when the provider did not say
     which pages it used, which the caller must treat as "cannot verify", not as "none".
     Raises SearchUnavailable if the endpoint rejects every form of the request.
 
+    ``api="compat"`` uses the OpenAI-compatible endpoint, which per Alibaba's docs never
+    returns sources. ``api="dashscope"`` uses Alibaba's native API, which can.
+
     If ``info`` is given it is filled with which form of the request was accepted
     (``info["request"]``), for diagnostics.
     """
+    if api == "dashscope":
+        return chat_with_search_native(
+            ai, user, system=system, temperature=temperature, max_tokens=max_tokens, timeout=timeout, info=info
+        )
     from openai import OpenAI
 
     client = OpenAI(

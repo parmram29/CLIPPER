@@ -38,6 +38,8 @@ LogFn = Callable[[str], None]
 
 # Re-research when the cached result is older than this (a CLIPPER default: trends decay fast).
 AUTO_REFRESH_DAYS = 3
+# After a failed attempt, wait this long before trying again on its own.
+FAIL_BACKOFF_HOURS = 24
 MAX_HASHTAGS = 10
 MAX_TEXT_ITEMS = 5
 TAG_CHARS = 30
@@ -188,12 +190,16 @@ def research(
     today: date | None = None,
     now: float | None = None,
     log: LogFn | None = None,
+    api: str = "compat",
 ) -> Report:
-    """One web-search call, checked and cleaned. Raises SearchUnavailable or ResearchFailed."""
+    """One web-search call, checked and cleaned. Raises SearchUnavailable or ResearchFailed.
+
+    ``api="dashscope"`` uses Alibaba's native API, the only route documented to return sources.
+    """
     log = log or (lambda m: None)
     prompt = build_prompt(niche=niche, region=region, platform=platform, today=today or date.today())
     request_info: dict[str, Any] = {}
-    text, _usage, sources = llm.chat_with_search(ai, prompt, info=request_info)
+    text, _usage, sources = llm.chat_with_search(ai, prompt, info=request_info, api=api)
     try:
         data = llm.extract_json(text)
     except ValueError as exc:
@@ -248,11 +254,21 @@ def explain_empty(report: Report) -> list[str]:
         f"Sources returned by the search: {report.n_sources}. Items the model proposed: {report.proposed} "
         f"(dropped as unverifiable: {report.dropped}).",
     ]
-    if report.n_sources == 0 and report.proposed == 0:
+    native = report.request.startswith("native")
+    if report.n_sources == 0 and report.proposed == 0 and not native:
         lines.append(
-            "Likely cause: web search did not run for this model. The API returned no sources and the "
-            "model, told never to answer from memory, reported nothing. Try a different model: "
-            "CLIPPER_SEARCH_MODEL=qwen-plus (or another search-capable Qwen model), then run this again."
+            "Likely cause: web search did not run for this model (or it cannot search). The model, told "
+            "never to answer from memory, reported nothing. Note that through the OpenAI-compatible "
+            "endpoint Alibaba's docs say sources are never returned, so 0 sources is expected there "
+            "either way: what matters is that the model found nothing. Try CLIPPER_SEARCH_API=dashscope "
+            "(the native API, which can return sources) and/or a different model with "
+            "CLIPPER_SEARCH_MODEL=qwen-plus."
+        )
+    elif report.n_sources == 0 and report.proposed == 0:
+        lines.append(
+            "Even through the native API the search returned no sources and the model reported nothing: "
+            "this model or account most likely cannot web-search. Try a different model with "
+            "CLIPPER_SEARCH_MODEL=qwen-plus, or use your own list (`clipper trends --init`)."
         )
     elif report.n_sources > 0 and report.proposed == 0:
         lines.append("The search returned pages, but the model found no trends in them.")
@@ -331,6 +347,56 @@ def to_trends(report: Report, *, now: float | None = None) -> Trends:
     )
 
 
+def _failure_path(cache_file: Path) -> Path:
+    return cache_file.with_suffix(".fail")
+
+
+def _recent_failure(cache_file: Path, now: float) -> dict[str, Any] | None:
+    """The last failed attempt, if it was less than FAIL_BACKOFF_HOURS ago."""
+    try:
+        marker = json.loads(_failure_path(cache_file).read_text(encoding="utf-8"))
+        if now - float(marker["at"]) < FAIL_BACKOFF_HOURS * 3600:
+            return marker
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return None
+
+
+def _record_failure(cache_file: Path, now: float, reason: str) -> None:
+    try:
+        marker = _failure_path(cache_file)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"at": now, "reason": reason[:120]}), encoding="utf-8")
+    except OSError:
+        pass  # a missing marker only means it will try again sooner
+
+
+def _clear_failure(cache_file: Path) -> None:
+    try:
+        _failure_path(cache_file).unlink()
+    except OSError:
+        pass
+
+
+def _hint_for(exc: Exception) -> str:
+    """What to do about a refused search, judged from the error text."""
+    text = str(exc).lower()
+    if "quota" in text or "payment" in text or "free tier" in text:
+        return (
+            "This is Alibaba's refusal, not CLIPPER's. It says the free quota for this model is used up and "
+            "that it will not bill you instead. Alibaba names two causes: payment details not completed, or "
+            "the 'use free tier only' mode still switched on (its message says to turn that off in the "
+            "Alibaba console if you have already added payment details). CLIPPER cannot change either. If you "
+            "do want to pay, check the price first. Otherwise pick a model that still has free quota with "
+            "CLIPPER_SEARCH_MODEL=<model>, or write your own list with `clipper trends --init`."
+        )
+    return (
+        "Web search may not be available for this model or account. Try "
+        "CLIPPER_SEARCH_MODEL=<a search-capable model, e.g. qwen-plus>, or write your own "
+        "list with `clipper trends --init`."
+    )
+
+
 def auto_trends(
     ai: Mapping[str, Any],
     *,
@@ -341,11 +407,14 @@ def auto_trends(
     now: float | None = None,
     cache_dir: str | Path | None = None,
     log: LogFn | None = None,
+    api: str = "compat",
 ) -> Trends | None:
     """Trends for this niche and region: from the cache while fresh, otherwise researched anew.
 
     Never raises. If research fails it says why and falls back to an older cached result
-    (flagged stale if old enough) or to nothing, so captions still get written.
+    (flagged stale if old enough) or to nothing, so captions still get written. After a failure it
+    does not try again for FAIL_BACKOFF_HOURS (``force`` overrides), so a feature that does not work
+    on this account costs one call a day, not one per run.
     """
     log = log or (lambda m: None)
     current = time.time() if now is None else now
@@ -355,26 +424,36 @@ def auto_trends(
     if cached and not force and (current - cached.fetched_at) / 86400 < AUTO_REFRESH_DAYS:
         return to_trends(cached, now=current)
 
+    if not force:
+        recent = _recent_failure(path, current)
+        if recent:
+            log(
+                f"Trend research failed recently ({recent.get('reason', 'unknown')}), so it is not being "
+                f"retried for {FAIL_BACKOFF_HOURS}h. `--refresh-trends` tries again now."
+            )
+            return to_trends(cached, now=current) if cached else None
+
     log("Researching current trends (web search)...")
+    reason = ""
     try:
-        report = research(ai, niche=niche, region=region, platform=platform, now=current, log=log)
+        report = research(ai, niche=niche, region=region, platform=platform, now=current, log=log, api=api)
     except llm.SearchUnavailable as exc:
-        log(
-            f"Could not research trends: {exc}\n"
-            "   Web search may not be available for this model or account. Try "
-            "CLIPPER_SEARCH_MODEL=<a search-capable model, e.g. qwen-plus>, or write your own "
-            "list with `clipper trends --init`."
-        )
+        reason = "search refused"
+        log(f"Could not research trends: {exc}\n   {_hint_for(exc)}")
     except Exception as exc:  # noqa: BLE001 - research must never block caption writing
+        reason = "unusable reply"
         log(f"Could not research trends: {str(exc)[:200]}")
     else:
         if not report.is_empty():
             save_cache(path, report)
+            _clear_failure(path)
             return to_trends(report, now=current)
+        reason = "found nothing"
         log("The search found no usable current trends.")
         for line in explain_empty(report):
             log(f"   {line}")
 
+    _record_failure(path, current, reason)
     if cached:
         log("Using the older cached trends instead.")
         return to_trends(cached, now=current)

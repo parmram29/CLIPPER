@@ -113,15 +113,19 @@ clipper social out/sessions/<session> --niche "reality TV drama" --region "Unite
 Set `CLIPPER_NICHE` and `CLIPPER_REGION` in `.env` once and forget them. What you should know about it:
 
 - **It is research from web pages about TikTok, not data from TikTok.** It is only as good as what the search finds.
-- **It is checked, not trusted.** Each item must cite a page, and an item is kept only if that page was among the sources the search
-  returned; anything else (a made-up hashtag with a made-up link) is dropped, and `clipper trends --refresh` tells you how many.
-  If the provider returns no sources at all, nothing can be checked, so the result is labelled **UNVERIFIED** (here and in the captions prompt).
+- **It is checked, not trusted, where checking is possible.** Each item must cite a page, and an item is kept only if that page was
+  among the sources the search returned; anything else (a made-up hashtag with a made-up link) is dropped, and `clipper trends --refresh`
+  tells you how many. **But per Alibaba's docs, the OpenAI-compatible endpoint (the default) never returns sources**, so results through it
+  are always labelled **UNVERIFIED** (here and in the captions prompt). Alibaba's native API can return them: set
+  `CLIPPER_SEARCH_API=dashscope` to use it. That route follows Alibaba's published description of the API and has not been run
+  against a real account.
 - **Web text is treated as data.** It is cut to short plain lines before it reaches the captions prompt, since a web page can contain
   text aimed at an AI.
 - **It may not work on your account.** Web search is a separate feature; I could not read Alibaba's docs from where this was built,
   so which models support it, what it costs, and the exact reply format are unconfirmed. Run `clipper trends --refresh` once to find out.
   If search is refused, captions are still written without trends; set `CLIPPER_SEARCH_MODEL` to a search-capable model, or
-  `CLIPPER_AUTO_TRENDS=0` to switch it off.
+  `CLIPPER_AUTO_TRENDS=0` to switch it off. After a failed attempt it waits 24 hours before trying again on its own, so a
+  feature that does not work on your account costs one call a day, not one per run (`--refresh-trends` forces a retry).
 - **You can override it.** A file you name (`--trends FILE`) or a filled-in `./trends.txt` (`clipper trends --init`) takes priority.
 
 A trend is only used when it genuinely fits the clip, and `trend_tags_used` records which ones were, so you can compare posts later.

@@ -324,7 +324,7 @@ def test_an_answer_with_nothing_checkable_is_not_cached_so_the_next_run_tries_ag
     result, logs = _auto(fake_llm, tmp_path)
     assert result is None and any("no usable current trends" in m for m in logs)
     assert tr.load_cache(tr.cache_path("reality TV", None, cache_dir=tmp_path)) is None
-    _auto(fake_llm, tmp_path)
+    _auto(fake_llm, tmp_path, now=NOW + (tr.FAIL_BACKOFF_HOURS + 1) * 3600)  # after the backoff window
     assert len(fake_llm.requests) == 2  # it asked again rather than trusting an empty result
 
 
@@ -470,3 +470,223 @@ def test_trends_refresh_explains_an_empty_result_and_exits_nonzero(monkeypatch, 
     assert cli.main(["trends", "--refresh", "--niche", "reality TV drama", "--region", "United States"]) == 1
     out = capsys.readouterr().out
     assert "web search did not run for this model" in out and "CLIPPER_SEARCH_MODEL=qwen-plus" in out
+
+
+# --- not hammering a feature that does not work on this account ---------------------------------------------------------
+
+
+def _fail_marker(tmp_path, niche="reality TV"):
+    return tr._failure_path(tr.cache_path(niche, None, cache_dir=tmp_path))
+
+
+def test_after_a_failure_it_does_not_retry_on_every_run(fake_llm, tmp_path):
+    fake_llm.reject_keys = {"enable_search"}
+    _auto(fake_llm, tmp_path)
+    tried = len(fake_llm.requests)
+    assert tried >= 1 and _fail_marker(tmp_path).is_file()
+
+    result, logs = _auto(fake_llm, tmp_path, now=NOW + 3600)  # an hour later
+    assert result is None and len(fake_llm.requests) == tried  # no new call
+    assert any("failed recently (search refused)" in m and "--refresh-trends" in m for m in logs)
+
+
+def test_it_tries_again_once_the_backoff_has_passed(fake_llm, tmp_path):
+    fake_llm.reject_keys = {"enable_search"}
+    _auto(fake_llm, tmp_path)
+    before = len(fake_llm.requests)
+    _auto(fake_llm, tmp_path, now=NOW + (tr.FAIL_BACKOFF_HOURS + 1) * 3600)
+    assert len(fake_llm.requests) > before
+
+
+def test_force_ignores_the_backoff(fake_llm, tmp_path):
+    fake_llm.reject_keys = {"enable_search"}
+    _auto(fake_llm, tmp_path)
+    before = len(fake_llm.requests)
+    _auto(fake_llm, tmp_path, now=NOW + 60, force=True)
+    assert len(fake_llm.requests) > before
+
+
+def test_a_success_clears_the_failure_marker(fake_llm, tmp_path):
+    fake_llm.reject_keys = {"enable_search"}
+    _auto(fake_llm, tmp_path)
+    assert _fail_marker(tmp_path).is_file()
+    fake_llm.reject_keys = set()
+    _research_server(fake_llm)
+    result, _ = _auto(fake_llm, tmp_path, now=NOW + 60, force=True)
+    assert result is not None and not _fail_marker(tmp_path).exists()
+
+
+def test_during_the_backoff_older_cached_trends_are_still_used(fake_llm, tmp_path):
+    _research_server(fake_llm)
+    _auto(fake_llm, tmp_path)  # cached at NOW
+    fake_llm.reject_keys = {"enable_search"}
+    late = NOW + (tr.AUTO_REFRESH_DAYS + 1) * 86400
+    stale_cache, _ = _auto(fake_llm, tmp_path, now=late)  # refresh fails, falls back to the cache
+    assert stale_cache is not None
+    count = len(fake_llm.requests)
+    again, logs = _auto(fake_llm, tmp_path, now=late + 3600)
+    assert again is not None and again.hashtags == stale_cache.hashtags
+    assert len(fake_llm.requests) == count and any("failed recently" in m for m in logs)
+
+
+@pytest.mark.parametrize("reply", ["not json at all", json.dumps(EMPTY)])
+def test_unusable_and_empty_answers_also_back_off(fake_llm, tmp_path, reply):
+    fake_llm.reply = reply
+    fake_llm.extra_response = {}
+    _auto(fake_llm, tmp_path)
+    assert _fail_marker(tmp_path).is_file()
+    count = len(fake_llm.requests)
+    _auto(fake_llm, tmp_path, now=NOW + 60)
+    assert len(fake_llm.requests) == count
+
+
+def test_a_garbled_failure_marker_is_ignored(fake_llm, tmp_path):
+    _research_server(fake_llm)
+    marker = _fail_marker(tmp_path)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("garbage")
+    result, _ = _auto(fake_llm, tmp_path)
+    assert result is not None and len(fake_llm.requests) == 1
+
+
+def test_a_failure_for_one_niche_does_not_block_another(fake_llm, tmp_path):
+    fake_llm.reject_keys = {"enable_search"}
+    _auto(fake_llm, tmp_path, niche="reality TV")
+    fake_llm.reject_keys = set()
+    _research_server(fake_llm)
+    result, _ = _auto(fake_llm, tmp_path, now=NOW + 60, niche="gaming")
+    assert result is not None
+
+
+# --- telling a quota problem from a missing feature -----------------------------------------------------------------------
+
+
+QUOTA = "Error code: 403 - The free quota has been exhausted. To continue accessing the model on a paid basis, please complete your payment information"
+
+
+def test_a_quota_error_gets_a_quota_hint_not_a_try_another_model_hint():
+    hint = tr._hint_for(RuntimeError(QUOTA))
+    assert "Alibaba's refusal, not CLIPPER's" in hint and "free quota" in hint
+    assert "use free tier only" in hint and "payment details" in hint  # the two causes Alibaba names
+    assert "check the price first" in hint
+    assert "CLIPPER_SEARCH_MODEL" in hint  # picking a model with quota left is still an option
+    assert "not be available" not in hint
+
+
+def test_other_errors_get_the_general_hint():
+    hint = tr._hint_for(RuntimeError("HTTP 400: unsupported parameter"))
+    assert "may not be available for this model or account" in hint
+
+
+def test_the_quota_hint_reaches_the_user(fake_llm, tmp_path, monkeypatch):
+    def refuse(*args, **kwargs):
+        raise llm.SearchUnavailable(f"web search request failed: {QUOTA}")
+
+    monkeypatch.setattr(llm, "chat_with_search", refuse)
+    result, logs = _auto(fake_llm, tmp_path)
+    assert result is None
+    assert any("Alibaba's refusal, not CLIPPER's" in m for m in logs)
+
+
+# --- Alibaba's native API (the route that can return sources) ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "base,expected",
+    [
+        ("https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/text-generation/generation"),
+        ("https://dashscope.aliyuncs.com/compatible-mode/v1", "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"),
+        ("http://127.0.0.1:9/compatible-mode/v1", "http://127.0.0.1:9/api/v1/services/aigc/text-generation/generation"),
+    ],
+)
+def test_the_native_url_is_on_the_same_host(base, expected):
+    assert llm.native_search_url(base) == expected
+
+
+def test_the_native_request_has_the_documented_shape(fake_llm):
+    _research_server(fake_llm)
+    llm.chat_with_search(_ai(fake_llm), "find trends", system="be brief", api="dashscope")
+    request = fake_llm.requests[0]
+    assert request["path"].endswith("/api/v1/services/aigc/text-generation/generation")
+    assert request["auth"] == "Bearer k"
+    body = request["body"]
+    assert body["model"] == "qwen-flash"
+    assert body["input"]["messages"] == [{"role": "system", "content": "be brief"}, {"role": "user", "content": "find trends"}]
+    assert body["parameters"]["result_format"] == "message" and body["parameters"]["enable_search"] is True
+    assert body["parameters"]["search_options"] == {"forced_search": True, "enable_source": True}
+
+
+def test_the_native_reply_gives_the_text_the_usage_and_the_sources(fake_llm):
+    _research_server(fake_llm)
+    info = {}
+    text, usage, sources = llm.chat_with_search(_ai(fake_llm), "x", api="dashscope", info=info)
+    assert json.loads(text)["hashtags"]
+    assert usage == {"prompt_tokens": 11, "completion_tokens": 22}  # input_tokens / output_tokens
+    assert [s["url"] for s in sources] == [PAGE, "https://other.example/list"]
+    assert info["request"] == "native API: enable_search + options"
+
+
+def test_the_native_route_falls_back_to_the_plain_switch(fake_llm):
+    _research_server(fake_llm)
+    fake_llm.reject_keys = {"search_options"}
+    info = {}
+    llm.chat_with_search(_ai(fake_llm), "x", api="dashscope", info=info)
+    assert len(fake_llm.requests) == 2 and info["request"] == "native API: enable_search only"
+    assert "search_options" not in fake_llm.requests[1]["body"]["parameters"]
+
+
+def test_a_refused_native_request_says_why(fake_llm):
+    fake_llm.reject_keys = {"enable_search"}
+    with pytest.raises(llm.SearchUnavailable, match=r"native web search request failed: HTTP 400.*unsupported parameter"):
+        llm.chat_with_search(_ai(fake_llm), "x", api="dashscope")
+
+
+def test_an_unreachable_native_endpoint_is_search_unavailable_not_a_crash(monkeypatch):
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    with pytest.raises(llm.SearchUnavailable, match="native web search request failed"):
+        llm.chat_with_search({"api_key": "k", "base_url": "http://127.0.0.1:9/compatible-mode/v1", "model": "m"}, "x", api="dashscope", timeout=3)
+
+
+def test_research_through_the_native_api_can_verify_its_findings(fake_llm):
+    _research_server(fake_llm)
+    report = tr.research(_ai(fake_llm), api="dashscope")
+    assert report.verified is True and report.n_sources == 2
+    assert report.hashtags == ["dramaalert", "datingfails"]
+    assert report.request.startswith("native")
+
+
+def test_the_diagnosis_says_so_when_even_the_native_api_found_nothing(fake_llm, tmp_path):
+    _research_server(fake_llm, payload=EMPTY, sources=None)
+    logs = []
+    tr.auto_trends(_ai(fake_llm), niche="x", now=NOW, cache_dir=tmp_path, log=logs.append, api="dashscope")
+    text = "\n".join(logs)
+    assert "Even through the native API" in text and "most likely cannot web-search" in text
+
+
+def test_the_compatible_endpoint_diagnosis_explains_why_zero_sources_is_expected(fake_llm, tmp_path):
+    text = _empty_run(fake_llm, tmp_path, EMPTY, sources=None)
+    assert "sources are never returned" in text and "CLIPPER_SEARCH_API=dashscope" in text
+
+
+def test_search_api_setting():
+    from clipper import cli
+
+    assert cli.search_api({}) == "compat"
+    assert cli.search_api({"CLIPPER_SEARCH_API": " DashScope "}) == "dashscope"
+    assert cli.search_api({"CLIPPER_SEARCH_API": ""}) == "compat"
+    with pytest.raises(Exception, match="must be 'compat' or 'dashscope'"):
+        cli.search_api({"CLIPPER_SEARCH_API": "magic"})
+
+
+def test_the_cli_uses_the_native_api_when_asked(monkeypatch, fake_llm, tmp_path, capsys):
+    from clipper import cli
+
+    monkeypatch.setenv("CLIPPER_API_KEY", "sk-test")
+    monkeypatch.setenv("CLIPPER_BASE_URL", fake_llm.base_url)
+    monkeypatch.setenv("CLIPPER_MODEL", "qwen-flash")
+    monkeypatch.setenv("CLIPPER_SEARCH_API", "dashscope")
+    monkeypatch.chdir(tmp_path)
+    _research_server(fake_llm)
+    assert cli.main(["trends", "--refresh"]) == 0
+    assert fake_llm.requests[0]["path"].endswith("/generation")
+    assert "sources returned by the search: 2" in capsys.readouterr().out
