@@ -1,3 +1,8 @@
+## Copyright
+
+Original pipeline: Copyright (c) 2026 Aji Prakoso, MIT License (see LICENSE).
+Additions and modifications: Copyright (c) 2026 Parmanand Ramcharran.
+
 # CLIPPER
 
 Turn a long video into vertical clips for TikTok, Reels and Shorts, from the command line.
