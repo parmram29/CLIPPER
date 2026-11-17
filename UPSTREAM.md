@@ -87,7 +87,7 @@ this repo, as the license requires.
 
 ## History
 
-Commit `cb068fb` on this branch imported a different project,
+Commit `99c1e97` on this branch imported a different project,
 [op7418/Youtube-clipper-skill](https://github.com/op7418/Youtube-clipper-skill) (MIT, a Claude Code
 skill), as the first base. It was replaced by the jipraks core in the commit after it;
 the earlier commit remains in git history.
