@@ -652,7 +652,8 @@ def _export(session_dir: str | Path, dest: str | None, open_after: bool) -> None
 
     result = export_mod.export_clips(session_dir, dest)
     print(f"\nExported {len(result.clips)} clip(s) to: {result.dest}")
-    print("   captions.txt has a ready-to-paste caption for each; review.csv is the review sheet.")
+    print("   Each clip has a matching .txt (same name) with its caption and hashtags; captions.txt has them all.")
+    print("   review.csv is the review sheet.")
     if sys.platform == "darwin":
         print("   To AirDrop: select the clips in Finder, then Share > AirDrop.")
     if open_after and not export_mod.reveal(result.dest):

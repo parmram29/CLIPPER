@@ -88,7 +88,7 @@ That finds highlights, renders the best three, writes their captions and hashtag
 | `clipper process SESSION` | Renders clips from a saved session. |
 | `clipper run URL` | `find` and `process` in one go. |
 | `clipper social SESSION` | Writes (or rewrites) titles, captions and hashtags. |
-| `clipper export SESSION` | Copies finished clips into one folder. |
+| `clipper export SESSION` | Copies finished clips into one folder, each with a matching `.txt` of its captions and hashtags. |
 | `clipper check SESSION` | Checks that most of the picks are drama scenes (6 of 8 by default). Add `--rejudge` to score picks you already have. Exit status 1 if it fails. |
 | `clipper review SESSION` | Writes a spreadsheet so you can rate the picks. |
 | `clipper eval review.csv` | Compares your ratings with the AI's scores. |
@@ -136,7 +136,7 @@ A video longer than about 37 minutes isn't sent to the model in one piece. CLIPP
 
 ## Captions, hashtags and trends
 
-Each clip gets a cover title, three caption options, 3 to 5 hashtags, a few search keywords, and a pinned comment. The three captions take different angles, a tease, a question and a hot take, so you can try them against each other. Each one is under 150 characters with the hook at the start and no spoilers. It all lands in `<session>/social/`, and `clipper export` puts the captions in a `captions.txt` you can copy from.
+Each clip gets a cover title, three caption options, 3 to 5 hashtags, a few search keywords, and a pinned comment. The three captions take different angles, a tease, a question and a hot take, so you can try them against each other. Each one is under 150 characters with the hook at the start and no spoilers. It all lands in `<session>/social/`, and `clipper export` gives every clip a matching `.txt` (same name as the video) with its captions and hashtags, plus a `captions.txt` holding all of them.
 
 The thinking behind them comes from secondary sources, not TikTok itself (TikTok's own explanation wasn't reachable when this was built). Videos seem to spread when people watch to the end, replay, share and comment, and the first seconds matter a lot. Nobody outside TikTok knows the real weights, so there are no numbers in the prompt. A caption can't rescue a weak clip. It can set up the first seconds, add words people search for, and invite a reply. The length limits are this project's choices, not TikTok rules.
 
@@ -157,7 +157,7 @@ Captions can use what's trending, but TikTok has no official feed for that. CLIP
 clipper export out/sessions/<session> --open
 ```
 
-This copies the finished clips into one folder (by default `~/Desktop/clipper-exports/<session>`), named like `01 - short-title.mp4`. A `captions.txt` with ready-to-paste captions and the review spreadsheet go in with them. On a Mac, select the clips in Finder and use Share > AirDrop. AirDrop can't be driven from a command line, so CLIPPER stops at the folder. `--to DIR` exports anywhere, for example a folder that syncs to your phone.
+This copies the finished clips into one folder (by default `~/Desktop/clipper-exports/<session>`), named like `01 - short-title.mp4`. Next to each one is a `01 - short-title.txt` with that clip's title, the hook text shown at its start, its captions, hashtags and pinned comment, and where in the source video it came from, so you can always tell which hashtags belong to which clip. A `captions.txt` holding all of them and the review spreadsheet go in too. On a Mac, select the clips in Finder and use Share > AirDrop. AirDrop can't be driven from a command line, so CLIPPER stops at the folder. `--to DIR` exports anywhere, for example a folder that syncs to your phone.
 
 ## Rating the picks
 
