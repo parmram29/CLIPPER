@@ -79,10 +79,24 @@ clipper run "https://www.youtube.com/watch?v=..." --top 3 --export --open
 
 That finds highlights, renders the best three, writes their captions and hashtags, copies the clips into a folder on your Desktop, and opens it. The clips are also kept under `out/sessions/<date-time>/clips/`.
 
+### Or use the app (no typing)
+
+Once it's set up you don't need the Terminal. In Finder, open the CLIPPER folder and double-click **`CLIPPER.command`**. A window opens (leave it open) and your browser shows the app:
+
+1. Paste a YouTube link.
+2. Pick a style (drama and fights, funny and wild, or podcasts), how many clips you want, or tick "Let me choose the moments myself" to see everything it found first.
+3. Watch the progress. When it's done, each clip has a player, its captions and hashtags with Copy buttons, and (green) the hashtags that came from what's trending right now.
+4. "Copy to Desktop folder" makes the folder you AirDrop from.
+
+The first time, `CLIPPER.command` sets itself up (a few minutes, needs internet), and it repairs itself if you move the folder. If macOS says the file "can't be opened because Apple cannot check it", right-click it, choose Open, and confirm once. To stop CLIPPER, close that window. The **Setup** page checks that everything is ready and shows how each trend source is doing.
+
+Under the hood the app runs the same `clipper` commands, so it and the Terminal never disagree. It runs only on your computer (it listens on `127.0.0.1`, never the network), lets in only the browser tab the launcher opened, and needs nothing beyond what CLIPPER already uses. From a Terminal, `clipper gui` starts it too.
+
 ## Commands
 
 | Command | What it does |
 |---|---|
+| `clipper gui` | Opens the point-and-click app in your browser (same as double-clicking `CLIPPER.command`). |
 | `clipper doctor` | Checks your setup. Add `--check-ai` to test the AI key. |
 | `clipper find URL` | Picks highlights and saves them as a session. |
 | `clipper process SESSION` | Renders clips from a saved session. |
@@ -92,7 +106,7 @@ That finds highlights, renders the best three, writes their captions and hashtag
 | `clipper check SESSION` | Checks that most of the picks are drama scenes (6 of 8 by default). Add `--rejudge` to score picks you already have. Exit status 1 if it fails. |
 | `clipper review SESSION` | Writes a spreadsheet so you can rate the picks. |
 | `clipper eval review.csv` | Compares your ratings with the AI's scores. |
-| `clipper trends` | Shows or refreshes the trend list that captions use. `--diagnose` tests web search step by step. |
+| `clipper trends` | Shows the trends captions use. `--live` reads the live sources now and says how each went; `--init-sites` lets you add trend websites; `--diagnose` tests the AI web search. |
 
 Options you'll probably want:
 
@@ -140,16 +154,33 @@ Each clip gets a cover title, three caption options, 3 to 5 hashtags, a few sear
 
 The thinking behind them comes from secondary sources, not TikTok itself (TikTok's own explanation wasn't reachable when this was built). Videos seem to spread when people watch to the end, replay, share and comment, and the first seconds matter a lot. Nobody outside TikTok knows the real weights, so there are no numbers in the prompt. A caption can't rescue a weak clip. It can set up the first seconds, add words people search for, and invite a reply. The length limits are this project's choices, not TikTok rules.
 
-### Trends (experimental, off by default)
+### Trends: what's hot right now, read on its own
 
-Captions can use what's trending, but TikTok has no official feed for that. CLIPPER can try web research instead: it asks a search-enabled Qwen model what's trending on TikTok for your niche and region, keeps only findings that match a page the search really returned, and caches the answer for 3 days.
+Hashtags work best when they match what people are looking at *today*, so CLIPPER reads that itself, with nothing for you to do. Every few hours (and at the start of a run, if its copy is out of date) it checks a set of public sources, cross-checks them, and hands the caption writer what is hot and tied to your video:
 
-**It doesn't work well yet, so it's off by default.** On the one account it was tried on, Alibaba's search returned seven pages, nearly all in Chinese and all about TikTok in general (news, and how-to guides for finding trends). The model correctly said none of them listed current hashtags for an English-language niche. The limit is what that search engine finds, not the code. Alibaba also refused its multi-round "agent" search form ("Non-streaming mode does not support Web Search in thinking mode"), and CLIPPER doesn't stream, so it uses the standard search.
+| Source | What it tells us |
+|---|---|
+| Google Trends, Wikipedia's most-read pages, Bluesky and Mastodon trending, entertainment and gaming news | what's hot for everyone |
+| Google News and Bing News, Google and Bing search suggestions, YouTube's newest videos on the topic | what's being said and searched about *your niche and this video* |
+| The video's own tags and hashtags | what the show or streamer already calls it |
+| Websites you add (`clipper trends --init-sites`) | any trend or virality site you use |
 
-- To see what the search returns on your account, run `clipper trends --diagnose`. It tests each search request form and shows whether it was accepted, which pages came back, and what the model says about them.
-- To turn it on, set `CLIPPER_AUTO_TRENDS=1` in `.env`, or force one try with `--refresh-trends`. After a failed attempt it waits 24 hours before trying again on its own.
-- To use your own list instead, run `clipper trends --init` and fill in `trends.txt`. A list you write always wins.
-- Without trends, captions are written from the clip itself plus general best practice. That works fine.
+Something that shows up in several independent sources ranks above something one source says, and something hot that is also about your topic ranks highest. The caption writer is told to use a trend only when it fits the clip, and to skip tags like #fyp.
+
+**What this is not: it doesn't read TikTok.** TikTok publishes no trends feed. Its Creative Center shows an anonymous visitor only a few hashtags and has no public API, and reading the For You page automatically needs a logged-in session, which TikTok's terms forbid and which can get the account limited. CLIPPER never touches TikTok or your account. Hashtags also don't make a video spread by themselves: viewers watching to the end matters far more, and TikTok's own advice is that tags like #fyp don't help.
+
+**Honest status: not yet checked against the live sites.** These sources couldn't be reached from where this was built, so they were tested against realistic samples, not the real feeds. Run `clipper trends --live` (or press "Check the trend sources" on the app's Setup page) to see in plain words how each source went on your computer. A source that fails is skipped, and nothing here can stop a run.
+
+- **Add sites you trust:** `clipper trends --init-sites` makes `trend_sites.txt`. One address per line, with `{query}` replaced by your video's topic. Each page is read politely: CLIPPER says who it is, sends no login, obeys the site's robots.txt, and reads it at most every few hours. A page that needs a login, or fills itself in with JavaScript, gives nothing, and the check says so. A site can add hashtags and supporting text, but it can't put an invented trend at the top by itself.
+- **Choose sources:** `CLIPPER_TREND_SOURCES=default,reddit` (Reddit is opt-in because it restricts automated access). `CLIPPER_LIVE_TRENDS=0` turns all of this off, and `--no-auto-trends` skips it for one run.
+- **Your own list always wins:** run `clipper trends --init` and fill in `trends.txt`.
+- **Country:** `CLIPPER_REGION` ("United States", "UK", ...) picks the country for Google Trends and news.
+
+#### The older AI web research (experimental, off)
+
+CLIPPER can also ask a search-enabled Qwen model what's trending on TikTok, keeping only findings that match a page the search really returned. On the one account it was tried on, Alibaba's search returned pages that were nearly all in Chinese and about TikTok in general, so it is off. `clipper trends --diagnose` shows what the search returns on your account; `CLIPPER_AUTO_TRENDS=1` turns it on, and `--refresh-trends` falls back to it when the live sources give nothing.
+
+- Without any trends, captions are written from the clip itself plus general best practice. That works fine.
 
 ## Getting clips onto your phone
 
@@ -177,13 +208,15 @@ The report shows how closely the AI's ranking matches yours, how often its top p
 
 Checked by hand, on an Intel MacBook Air: setup, `doctor`, and one real episode taken from a YouTube link to a finished vertical clip, using `qwen-flash`.
 
-Covered by automated tests only, so not yet run on real videos with a live model: long-video windows and re-scoring, the `viral` prompt, titles and captions, export, the review sheet, and `eval`. The tests run against a small fake AI server and synthetic video, so they check the logic, not how good the AI's choices are. That's what `clipper eval` is for.
+Covered by automated tests only, so not yet run on real videos with a live model: long-video windows and re-scoring, the `viral` prompt, titles and captions, live trends, export, the review sheet, `eval`, and the app. The tests run against a small fake AI server and synthetic video, so they check the logic, not how good the AI's choices are. That's what `clipper eval` is for.
 
 Known gaps:
 
 - Videos need YouTube captions. There's no speech-to-text fallback yet.
+- The app has been tried in a headless Chrome-style browser against a stand-in for the pipeline, not yet on a Mac in Safari with real videos. Clip playback uses the browser's own player, which I couldn't test here.
+- The app takes a YouTube link, not a file from your computer or a Twitch link, for the same captions reason.
 - Clip length is fixed at roughly one to two minutes.
-- Automatic trend research doesn't return usable results yet (see [Trends](#trends-experimental-off-by-default)).
+- The live trend sources haven't been checked against the real sites yet, only against samples (see [Trends](#trends-whats-hot-right-now-read-on-its-own)); `clipper trends --live` shows how each one goes on your computer. The older AI web research doesn't return usable results.
 - Posting is manual. TikTok's API only allows private posts until an app is audited.
 - Only clip footage you have permission to use. YouTube's terms and copyright law apply to what you download and post.
 

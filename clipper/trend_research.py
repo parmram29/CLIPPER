@@ -87,6 +87,7 @@ class Report:
     reply_preview: str = ""  # the start of the model's reply
     request: str = ""  # which form of the search request the endpoint accepted
     refused: list[str] = field(default_factory=list)  # forms tried first and refused, with the reason
+    notes: list[str] = field(default_factory=list)  # live radar only: one line per source saying how it went
 
     def is_empty(self) -> bool:
         return not (self.hashtags or self.formats or self.topics)

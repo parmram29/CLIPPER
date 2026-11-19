@@ -46,14 +46,14 @@ def default_export_dir(session_dir: str | Path) -> Path:
     return Path.home() / "Desktop" / "clipper-exports" / Path(session_dir).name
 
 
-def _clock(value: Any) -> str:
+def clock(value: Any) -> str:
     """``00:26:56,000`` -> ``00:26:56``: the milliseconds are noise for a person."""
     return str(value or "").strip().split(",")[0].split(".")[0]
 
 
 def _source_line(session: Mapping[str, Any], highlight: Mapping[str, Any]) -> str:
     """Where the clip came from (link, time range, channel), or "" if none of that is known."""
-    span = " - ".join(t for t in (_clock(highlight.get("start_time")), _clock(highlight.get("end_time"))) if t)
+    span = " - ".join(t for t in (clock(highlight.get("start_time")), clock(highlight.get("end_time"))) if t)
     info = session.get("video_info")
     channel = str(info.get("channel") or "").strip() if isinstance(info, Mapping) else ""
     parts = [

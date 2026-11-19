@@ -36,7 +36,7 @@ this repo, as the license requires.
   items matched to the sources the search returned (when the route can return them), cleans the text, caches
   the result, and backs off for a day after a failure (TikTok has no official trends feed)
 - `clipper/trends.py`: an optional user-written trends file, which takes priority over the research
-- `clipper/review.py`, `clipper/export.py`, `clipper/evaluation.py`: review sheet, export folder, and
+- `clipper/review.py`, `clipper/export.py`, `clipper/evaluation.py`: review sheet, export folder (each clip also gets a matching `.txt` with its captions and hashtags), and
   agreement between the model's scores and the user's ratings
 - `clipper/llm.py`: a small chat helper for the calls above
 - `clipper/drama.py`: what counts as a drama scene (a separate AI judgement of 6+ out of 10), the 6-of-8 bar,
@@ -45,6 +45,12 @@ this repo, as the license requires.
 - `clipper/diagnostics.py`: the facts printed when a download dies with a cryptic file error (certifi's
   certificate file, cookies, free disk space), and a repair for a stale remembered certificate path. The CLI
   uses it so that one failed clip no longer stops the others (`cli.render_clips`)
+- `clipper/gui/`, `CLIPPER.command`: the point-and-click app (`clipper gui`): a small local web server on 127.0.0.1
+  (standard library only) that runs the same `clipper` commands and shows progress, the moments found, finished
+  clips with copy buttons for captions and hashtags, and a setup check. `CLIPPER.command` starts it by double-click
+- `clipper/trend_feeds.py`, `trend_sources.py`, `trend_rank.py`, `trend_sites.py`, `trend_net.py`: live trends, read on
+  their own from public sources (not TikTok), cross-checked, driven by the niche and the video, plus websites you
+  list in `trend_sites.txt`. `trend_net.py` is the only place they touch the internet
 - `pyproject.toml`, `requirements.txt` (pinned versions for dependency scanners), `setup.sh`, `.env.example`, `tests/`
 
 ## Modified upstream code
@@ -72,6 +78,8 @@ this repo, as the license requires.
   optional `keep_all`. Upstream keeps the first `num_clips` valid picks in the model's own order, which threw
   away candidates before anything ranked them (6 of 22 on a real run); with `keep_all` every valid pick is
   returned so the caller can rank them all. Without it nothing changes.
+- `clipper/subtitle_downloader.py`: the saved video info also keeps the video's own `tags`, which feed the hashtag
+  suggestions. Nothing else about the download changed.
 - `clipper/constants.py`: one docstring now names the new package.
 - `clipper/helpers.py`: a `# nosec B310` comment on the one-time face-model download, which uses a
   fixed https URL, so the security scanner `bandit` does not flag it. No behaviour change.

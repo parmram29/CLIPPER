@@ -85,9 +85,12 @@ def _isolate_environment(monkeypatch, tmp_path_factory):
     for var in (
         "CLIPPER_API_KEY", "DASHSCOPE_API_KEY", "CLIPPER_BASE_URL", "CLIPPER_MODEL",
         "CLIPPER_NICHE", "CLIPPER_TRENDS", "CLIPPER_REGION", "CLIPPER_SEARCH_MODEL",
+        "CLIPPER_COOKIES",  # the CLI sets this for the downloader; it must not leak from one test into the next
+        "CLIPPER_TREND_SOURCES", "CLIPPER_DRAMA_SHARE",
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("CLIPPER_AUTO_TRENDS", "0")  # tests of automatic research switch it on
+    monkeypatch.setenv("CLIPPER_LIVE_TRENDS", "0")  # tests of the live feeds switch it on and fake the network
     monkeypatch.setenv("CLIPPER_CACHE_DIR", str(tmp_path_factory.mktemp("clipper-cache")))
 
 
@@ -148,3 +151,28 @@ def highlight(start, end, title="T", score=8, hook="H"):
         "virality_score": score,
         "hook_text": hook,
     }
+
+
+@pytest.fixture(scope="module")
+def gui_real_run(tmp_path_factory):
+    """One complete `clipper run` through the stand-in pipeline (tests/gui_fake_cli.py): the real command
+    line and export code with only the internet-bound parts faked. Gives (project folder, home, its log lines)."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    base = tmp_path_factory.mktemp("gui-real-run")
+    (base / "home").mkdir()
+    env = {
+        **os.environ, "HOME": str(base / "home"), "CLIPPER_API_KEY": "test-key", "CLIPPER_CACHE_DIR": str(base / "cache"),
+        "FAKE_DELAY": "0", "CLIPPER_SKIP_DOTENV": "1", "PYTHONUNBUFFERED": "1",
+    }
+    stub = Path(__file__).parent / "gui_fake_cli.py"
+    done = subprocess.run(
+        [sys.executable, "-u", str(stub), "run", "https://www.youtube.com/watch?v=abcdefghijk", "--clips=8", "--profile=viral",
+         f"--out={base / 'out'}", "--top=2", "--export", "--niche=reality tv"],
+        cwd=base, env=env, capture_output=True, text=True, timeout=120,
+    )
+    assert done.returncode == 0, done.stderr
+    return base, base / "home", done.stdout.splitlines()

@@ -350,7 +350,12 @@ def _process(
     niche_text = resolve_niche(niche)
     trends = (
         load_trends_for_run(
-            trends_file, niche=niche_text, region=region, auto=auto_trends, refresh=refresh_trends
+            trends_file,
+            niche=niche_text,
+            region=region,
+            auto=auto_trends,
+            refresh=refresh_trends,
+            video_info=session.get("video_info"),
         )
         if social
         else None
@@ -517,6 +522,15 @@ def auto_trends_enabled(env: Mapping[str, str] | None = None) -> bool:
     return (env.get("CLIPPER_AUTO_TRENDS") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def live_trends_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """Live public feeds (see trend_feeds.py) are ON unless ``CLIPPER_LIVE_TRENDS`` is 0, false, no or off.
+
+    They need no key and no login, are read at most every few hours, and a failure never stops a run.
+    """
+    env = os.environ if env is None else env
+    return (env.get("CLIPPER_LIVE_TRENDS") or "1").strip().lower() not in ("0", "false", "no", "off")
+
+
 def search_ai_config(env: Mapping[str, str] | None = None) -> dict[str, str] | None:
     """The AI settings for trend research: same key and endpoint, optionally a different model
     (``CLIPPER_SEARCH_MODEL``) in case the chat model does not support web search."""
@@ -557,13 +571,14 @@ def load_trends_for_run(
     region: str | None = None,
     auto: bool = True,
     refresh: bool = False,
+    video_info: Mapping[str, Any] | None = None,
 ):
     """Work out which trends the captions should use, and say what was found.
 
     In order: a file you named (``--trends`` / ``$CLIPPER_TRENDS``), then ``./trends.txt`` if you
-    have filled it in, then automatic web research (cached, refreshed every few days). A path
-    you asked for that does not exist is an error; nothing found is just a note, and captions
-    are still written.
+    have filled it in, then the live public feeds (on by default; refreshed on their own every few
+    hours), then the experimental AI web research if you switched it on. A path you asked for that
+    does not exist is an error; nothing found is just a note, and captions are still written.
     """
     from . import trend_research
     from . import trends as trends_mod
@@ -581,8 +596,20 @@ def load_trends_for_run(
         _log(trends_mod.describe(loaded, explicit))
         return loaded
 
-    # Research runs if it is switched on, or if you asked for it right now with --refresh-trends;
-    # --no-auto-trends beats both.
+    # Live public feeds: on by default, cached for a few hours, and never able to stop a run.
+    # --no-auto-trends turns them off for this run.
+    if auto and live_trends_enabled(env):
+        from . import trend_feeds
+
+        found = trend_feeds.auto_feeds(
+            niche=niche, region=resolve_region(region, env), video_info=video_info, force=refresh, log=_log, env=env
+        )
+        if found:
+            _log(trends_mod.describe(found))
+            return found
+
+    # The experimental AI web research runs if it is switched on (CLIPPER_AUTO_TRENDS=1), or if you
+    # asked for a refresh right now and the live sources gave nothing; --no-auto-trends beats both.
     if auto and (refresh or auto_trends_enabled(env)):
         ai = search_ai_config(env)
         if ai:
@@ -729,6 +756,14 @@ def _cmd_trends(args: argparse.Namespace) -> int:
     from . import trends as trends_mod
 
     path = args.file or os.environ.get("CLIPPER_TRENDS") or trends_mod.DEFAULT_TRENDS_FILE
+    if args.init_sites:
+        from . import trend_sites
+
+        created = trend_sites.init_template()
+        print(f"Created {created}.")
+        print("Open it, add the trend or virality websites you use (one address per line), and save.")
+        print("Then `clipper trends --live` shows whether each one could be read.")
+        return 0
     if args.init:
         created = trends_mod.init_template(path)
         print(f"Created {created}.")
@@ -749,6 +784,17 @@ def _cmd_trends(args: argparse.Namespace) -> int:
             raise config.ConfigError("No API key configured. Set CLIPPER_API_KEY in .env to test web search.")
         for line in trend_research.diagnose(ai, niche=niche, region=region, api=search_api()):
             print(line)
+        return 0
+
+    if args.live:
+        from . import trend_feeds
+
+        found = trend_feeds.auto_feeds(niche=niche, region=region, force=True, log=_log)
+        if found is None:
+            print("Nothing could be read. Check your internet connection and try again; the lines above say which source failed.")
+            return 1
+        print(trends_mod.describe(found))
+        print(found.text)
         return 0
 
     manual = trends_mod.load_trends(path)
@@ -859,6 +905,11 @@ def _cmd_eval(args: argparse.Namespace) -> int:
     rated = evaluation.load_rated(args.csv)
     print(evaluation.format_report(evaluation.evaluate(rated, good=args.good, k=args.k)))
     return 0
+
+def _cmd_gui(args: argparse.Namespace) -> int:
+    from .gui import server
+
+    return server.serve(Path.cwd(), args.out, port=args.port, open_browser=not args.no_browser)
 
 
 def _ffmpeg_install_hint(platform: str | None = None) -> str:
@@ -1075,8 +1126,7 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument(
             "--refresh-trends",
             action="store_true",
-            help="research trends now (even though automatic research is off by default), "
-            "instead of using the cached result",
+            help="read the live trend feeds now, instead of using the result saved in the last few hours",
         )
 
     def add_find_args(sp: argparse.ArgumentParser) -> None:
@@ -1199,6 +1249,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="test each web-search request form on its own and show exactly what came back "
         "(a few small AI calls; writes nothing)",
     )
+    trends.add_argument(
+        "--init-sites",
+        action="store_true",
+        help="create trend_sites.txt, where you list trend or virality websites for CLIPPER to read as well",
+    )
+    trends.add_argument(
+        "--live",
+        action="store_true",
+        help="read the live public feeds now (Google Trends, Wikipedia, search suggestions), say how each "
+        "one went, and save the result. This is what runs on its own every few hours",
+    )
     trends.add_argument("--niche", help="what your account is about (default: $CLIPPER_NICHE)")
     trends.add_argument("--region", help="where your audience is (default: $CLIPPER_REGION)")
     trends.add_argument("--file", metavar="FILE", help="your own file (default: $CLIPPER_TRENDS, then ./trends.txt)")
@@ -1236,13 +1297,23 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--k", type=int, default=3, help="check the model's top K picks (default 3)")
     evaluate.set_defaults(func=_cmd_eval)
 
+    gui = sub.add_parser(
+        "gui",
+        help="open the point-and-click app in your browser (the same commands, no typing)",
+    )
+    gui.add_argument("--port", type=int, default=8765, help="where to listen on this computer (default 8765)")
+    gui.add_argument("--no-browser", action="store_true", help="do not open the browser; print the address instead")
+    gui.add_argument("--out", default=DEFAULT_OUT, help=f"where sessions are kept (default ./{DEFAULT_OUT})")
+    gui.set_defaults(func=_cmd_gui)
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     global _CA_FALLBACK
     args = build_parser().parse_args(argv)
-    config.load_dotenv_if_present()
+    if args.command != "gui":  # the app re-reads .env for every job instead, so edits to it take effect
+        config.load_dotenv_if_present()
     _CA_FALLBACK = ensure_ca_certificates()
     try:
         return args.func(args)

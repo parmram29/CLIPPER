@@ -47,7 +47,11 @@ Upstream = "https://github.com/jipraks/yt-short-clipper"
 clipper = "clipper.cli:main"
 
 [tool.setuptools]
-packages = ["clipper"]
+packages = ["clipper", "clipper.gui"]
+
+# The app's page, styles and script ship inside the package.
+[tool.setuptools.package-data]
+"clipper.gui" = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
