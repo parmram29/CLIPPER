@@ -34,6 +34,7 @@ def test_doctor_reports_a_failing_endpoint_and_exits_nonzero(monkeypatch, tmp_pa
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     monkeypatch.setenv("CLIPPER_API_KEY", "sk-x")
     monkeypatch.setenv("CLIPPER_BASE_URL", "http://127.0.0.1:9/v1")  # nothing listens on port 9
+    monkeypatch.setenv("CLIPPER_MODEL", "some-model")
     code = cli.main(["doctor", "--check-ai"])
     out = capsys.readouterr().out
     assert code == 1
@@ -105,3 +106,14 @@ def test_doctor_without_config_only_warns(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     assert code == 0  # missing key / cookies are warnings, not failures
     assert "No API key configured" in out and "cookies file not found" in out
+
+
+@needs_ffmpeg
+def test_doctor_asks_for_the_model_when_another_service_has_none_named(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CLIPPER_API_KEY", "sk-x")
+    monkeypatch.setenv("CLIPPER_BASE_URL", "http://127.0.0.1:9/v1")
+    code = cli.main(["doctor", "--check-ai"])
+    out = capsys.readouterr().out
+    assert code == 0  # a missing setting is a warning, not a failed call
+    assert "[WARN] CLIPPER_MODEL is not set" in out and "--check-ai skipped" in out

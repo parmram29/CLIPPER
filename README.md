@@ -49,13 +49,17 @@ You need at least your AI key.
 
 | Setting | What it's for |
 |---|---|
-| `CLIPPER_API_KEY` | Your key for the AI model. Required. |
-| `CLIPPER_BASE_URL` | Where the model lives. The default is Alibaba's Qwen (Singapore). Any OpenAI-compatible service works. |
-| `CLIPPER_MODEL` | Which model to use. The default is `qwen-plus`; `qwen-flash` is cheaper and fine for picking highlights. |
+| `CLIPPER_API_KEY` | Your Claude key from the [Claude Console](https://platform.claude.com/settings/keys). It starts with `sk-ant-`. Required. |
+| `CLIPPER_MODEL` | Which Claude model. The default is `claude-opus-5-5`. `claude-sonnet-5-5` costs about half as much per token and `claude-haiku-5-5` about a fortieth. Optional. |
+| `CLIPPER_EFFORT` | How hard Claude thinks before it answers: `low`, `medium`, `high`, `xhigh` or `max`. Optional. Left empty it uses the model's own default (`medium` on `claude-opus-5-5` and `claude-haiku-5-5`, `high` on most others). `low` makes Claude think less, which is quicker and cheaper; `high` and above think more. |
 | `CLIPPER_NICHE` | What your account is about, like `reality TV drama`. Optional. Used for captions. |
 | `CLIPPER_REGION` | Where your audience is, like `United States`. Optional. Only used if you turn trend research on. |
 
-Alibaba keys belong to a region. If yours came from the Beijing side, set `CLIPPER_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1`.
+The key is for Anthropic's API, which is billed separately from a Claude.ai subscription: make the key in the Console and add a few dollars of credit there. (Claude Max, Ultra and Team plans include monthly API credits that you claim by linking a Console organization to the plan; Free and Pro plans don't. See [API credits for subscribers](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers).) Prices are per million tokens: `claude-opus-5-5` is $4 in and $20 out, `claude-sonnet-5-5` $2 and $10, `claude-haiku-5-5` $0.10 and $0.50 (for prompts up to 100,000 tokens), as listed on Anthropic's [pricing page](https://platform.claude.com/docs/en/about-claude/pricing) on 2026-11-20. Claude thinks before it answers, and that thinking is billed as output tokens. After every run CLIPPER prints the real token counts (`AI token usage`), so you can work out what a run cost.
+
+**Using a different AI service.** Any OpenAI-compatible service still works (Alibaba's Qwen, OpenAI, a local server). Put that service's own key in `CLIPPER_API_KEY`, and set `CLIPPER_BASE_URL` to its address and `CLIPPER_MODEL` to its model. For Alibaba (Singapore) that's `CLIPPER_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1` and `CLIPPER_MODEL=qwen-plus`; Alibaba keys belong to a region, and a Beijing key needs `https://dashscope.aliyuncs.com/compatible-mode/v1`.
+
+A Claude key is only ever sent to Anthropic. If `.env` still holds an address or model from another service and your key starts with `sk-ant-`, CLIPPER ignores those two lines, tells you so (in `clipper doctor` and at the start of a run), and uses Claude; you can delete the old lines. `CLIPPER_PROVIDER=anthropic` is only for pointing Claude at a gateway of your own.
 
 ### Add your YouTube cookies
 
@@ -178,7 +182,7 @@ Something that shows up in several independent sources ranks above something one
 
 #### The older AI web research (experimental, off)
 
-CLIPPER can also ask a search-enabled Qwen model what's trending on TikTok, keeping only findings that match a page the search really returned. On the one account it was tried on, Alibaba's search returned pages that were nearly all in Chinese and about TikTok in general, so it is off. `clipper trends --diagnose` shows what the search returns on your account; `CLIPPER_AUTO_TRENDS=1` turns it on, and `--refresh-trends` falls back to it when the live sources give nothing.
+CLIPPER can also ask a search-enabled Qwen model what's trending on TikTok, keeping only findings that match a page the search really returned. On the one account it was tried on, Alibaba's search returned pages that were nearly all in Chinese and about TikTok in general, so it is off. `clipper trends --diagnose` shows what the search returns on your account; `CLIPPER_AUTO_TRENDS=1` turns it on, and `--refresh-trends` falls back to it when the live sources give nothing. It needs an OpenAI-compatible service with a web-search switch, so it does nothing when you use Claude; the live sources work with either.
 
 - Without any trends, captions are written from the clip itself plus general best practice. That works fine.
 
@@ -207,6 +211,8 @@ The report shows how closely the AI's ranking matches yours, how often its top p
 ## What works today
 
 Checked by hand, on an Intel MacBook Air: setup, `doctor`, and one real episode taken from a YouTube link to a finished vertical clip, using `qwen-flash`.
+
+Claude is covered by automated tests, and has not been tried on a live Anthropic account yet. The tests use the real `anthropic` library against a local stand-in server that answers with Anthropic's streaming format and error formats, and they check what is sent (no temperature, room to think, the key in one place), how replies and refusals are read, and what each error says. They can't show that Anthropic accepts every request, so the first real run is the real check: `clipper doctor --check-ai` makes one tiny call.
 
 Covered by automated tests only, so not yet run on real videos with a live model: long-video windows and re-scoring, the `viral` prompt, titles and captions, live trends, export, the review sheet, `eval`, and the app. The tests run against a small fake AI server and synthetic video, so they check the logic, not how good the AI's choices are. That's what `clipper eval` is for.
 
@@ -238,7 +244,15 @@ Run `clipper doctor` first. Most problems show up there.
 
 **`CERTIFICATE_VERIFY_FAILED`**: some Python installs on macOS ship without a list of trusted certificates. CLIPPER switches to the one from `certifi` automatically. If it still fails, something on your network (a work or school network, a VPN, or security software) may be intercepting HTTPS connections.
 
-**`AllocationQuota.FreeTierOnly` or "free quota has been exhausted"**: that's Alibaba refusing the request, not CLIPPER. It happens when a model's free allowance is used up and the "free quota only" switch is on, which stops Alibaba from billing you. Either turn the switch off for that model in the Alibaba console (their [docs](https://help.aliyun.com/en/model-studio/new-free-quota) say it can take about 30 minutes, and an account that isn't identity-verified has to verify and top up first), or use a model that still has free quota. Check prices before you switch to paying.
+**"Anthropic rejected the API key (401)"**: `CLIPPER_API_KEY` in `.env` isn't a valid Claude key. It should start with `sk-ant-`, be on one line with nothing else, and come from the [Console](https://platform.claude.com/settings/keys). A key that was deleted or copied with a missing piece fails the same way. `clipper doctor --check-ai` shows the result of one call.
+
+**"Your Anthropic account is out of credit"**: API use has its own balance, separate from a Claude.ai subscription. Add credit in the Console's [Billing page](https://platform.claude.com/settings/billing).
+
+**"Anthropic does not know the model"**: the `CLIPPER_MODEL` line in `.env` names a model that doesn't exist or that your account can't use. Delete the line to get `claude-opus-5-5`, or use `claude-sonnet-5-5` or `claude-haiku-5-5`.
+
+**"Claude ran out of room before it finished its reply"**: Claude spends part of its allowance thinking, and on a very long window it ran out. Run it again, add `CLIPPER_EFFORT=low` to `.env`, or use a shorter video.
+
+**`AllocationQuota.FreeTierOnly` or "free quota has been exhausted"** (only if you use Alibaba): that's Alibaba refusing the request, not CLIPPER. It happens when a model's free allowance is used up and the "free quota only" switch is on, which stops Alibaba from billing you. Either turn the switch off for that model in the Alibaba console (their [docs](https://help.aliyun.com/en/model-studio/new-free-quota) say it can take about 30 minutes, and an account that isn't identity-verified has to verify and top up first), or use a model that still has free quota. Check prices before you switch to paying.
 
 **Trends come back empty** (only if you turned them on): run `clipper trends --diagnose`. It sends each web-search request form on its own, shows whether Alibaba accepted or refused it (with the reason), lists the pages the search found, and prints what the model says when it isn't boxed into a strict format. If the pages are off-topic or in another language, the search engine just isn't finding what you need. Captions work without trends, so leaving them off is a fine answer.
 
@@ -248,7 +262,7 @@ This repo is public, so it's set up so that nothing private can end up in it.
 
 - **Your key and cookies stay on your computer.** `.env` and cookie files are git-ignored, including the usual names (`cookies.txt`, `www.youtube.com_cookies.txt`, JSON exports) and private keys. `tests/test_repo_hygiene.py` fails if that stops being true, or if any file that isn't git-ignored contains something shaped like an API key, a private key or a cookie line.
 - **Treat the cookies file like a password.** Whoever has it can use your YouTube login. Don't commit it, email it or paste it into a chat. If you've shared it anywhere, signing out of YouTube everywhere (or changing your Google password) makes it useless.
-- **Where your data goes.** `yt-dlp` talks to YouTube, using your cookies. The transcript of each video goes to the AI service you set in `.env` (Alibaba by default). If MediaPipe is installed, its face model is downloaded once from Google. CLIPPER itself sends nothing else anywhere and has no telemetry.
+- **Where your data goes.** `yt-dlp` talks to YouTube, using your cookies. The transcript of each video goes to the AI service you set in `.env` (Anthropic's Claude by default). If MediaPipe is installed, its face model is downloaded once from Google. CLIPPER itself sends nothing else anywhere and has no telemetry.
 - **Dependencies are checked.** `pyproject.toml` only allows versions of its dependencies that had no known security advisory when they were last checked (the date is in the file), and `requirements.txt` pins the exact versions the tests pass on. To check your own install, run `pip install pip-audit` and then `pip-audit`. `setup.sh` installs prebuilt packages only, so no third-party package gets compiled or runs its own build script on your machine.
 
 ## Credits and license

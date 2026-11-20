@@ -209,6 +209,7 @@ SAFE_FROM = {
     "pillow": "13.0.0",  # image-parsing advisories in every older release
     "python-dotenv": "1.2.2",  # CVE-2026-28684
     "certifi": "2026.10.18",  # still trusts a root CA whose intermediates have compromised keys
+    "anthropic": "0.87.0",  # 0.86.0: CVE-2026-34450, CVE-2026-34452 (memory tool file modes and path check)
 }
 
 

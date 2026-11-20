@@ -14,7 +14,7 @@ pause() {
 
 ready() {
   # The environment exists and everything the app needs can be imported from this folder.
-  [ -x "$PY" ] && "$PY" -c "import yt_dlp, openai, cv2, numpy, PIL, dotenv, certifi, clipper.gui.server" >/dev/null 2>&1
+  [ -x "$PY" ] && "$PY" -c "import yt_dlp, anthropic, openai, cv2, numpy, PIL, dotenv, certifi, clipper.gui.server" >/dev/null 2>&1
 }
 
 echo "CLIPPER"

@@ -238,7 +238,7 @@
     if (info && (!info.ai.configured || !info.cookies.found)) {
       notices.push(
         h("div", { class: "notice warn" }, h("strong", {}, "Almost ready"),
-          !info.ai.configured ? "CLIPPER needs your AI key. " : "CLIPPER needs your YouTube cookies file. ",
+          !info.ai.configured ? "CLIPPER needs your Claude key. " : "CLIPPER needs your YouTube cookies file. ",
           h("a", { href: "#/setup" }, "Open Setup to fix it")),
       );
     }
@@ -613,7 +613,8 @@
       h("div", { class: "card help" },
         h("h2", {}, "If something needs fixing"),
         h("h3", {}, "AI key"),
-        h("p", {}, "Open the CLIPPER folder (button above), open the file named ", h("code", {}, ".env"), " in any text editor, and put your Alibaba key after ", h("code", {}, "CLIPPER_API_KEY="), ". Save it, then run the check again."),
+        h("p", {}, "CLIPPER uses Claude. Make a key at platform.claude.com (Settings, API keys); it starts with ", h("code", {}, "sk-ant-"), ". Add a few dollars of credit there too: a Claude.ai subscription does not pay for API use."),
+        h("p", {}, "Then open the CLIPPER folder (button above), open the file named ", h("code", {}, ".env"), " in any text editor, and put the key after ", h("code", {}, "CLIPPER_API_KEY="), ". Save it, then run the check again. If the check says it ignored an old address or model, you can delete those lines."),
         h("h3", {}, "YouTube cookies"),
         h("p", {}, "While logged in to YouTube, use the “Get cookies.txt LOCALLY” browser extension to export cookies for youtube.com only. Save the file as ", h("code", {}, "cookies.txt"), " inside the CLIPPER folder."),
         h("h3", {}, "ffmpeg"),

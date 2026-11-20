@@ -12,10 +12,14 @@ requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 # Each minimum is the oldest release that has no known security advisory at or above it
-# (checked release by release against PyPI's advisory database on 2026-11-05).
+# (checked release by release against PyPI's advisory database on 2026-11-05; anthropic on 2026-11-20).
 # tests/test_repo_hygiene.py stops them being lowered by accident. pip still installs the
 # newest release your Python supports.
 dependencies = [
+    # Claude. 2.0.0 is the oldest release the Claude tests were run against (older ones lose a refusal's explanation);
+    # 0.86.0 had CVE-2026-34450 and CVE-2026-34452 (its local memory tool, which CLIPPER does not use), fixed in 0.87.0,
+    # and no later release is listed with an advisory.
+    "anthropic>=2.0.0",
     "openai>=1.0.0",
     "yt-dlp>=2026.8.19",
     # The same OpenCV distribution mediapipe requires, so installing the `face` extra

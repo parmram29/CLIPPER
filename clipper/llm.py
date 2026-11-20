@@ -1,7 +1,10 @@
-"""A small helper for chat calls to any OpenAI-compatible endpoint.
+"""A small helper for chat calls, to Claude or to any OpenAI-compatible endpoint.
 
 Not part of upstream. Used for the cross-window re-scoring and for post copy. Upstream's
 highlight finder keeps its own client.
+
+Which one a call goes to is decided by the ``ai`` settings dict (see ``provider_of``). Claude requests
+are made by ``claude_client``, the only module that uses Anthropic's SDK.
 """
 
 from __future__ import annotations
@@ -10,7 +13,21 @@ import json
 import re
 from typing import Any, Mapping, Sequence
 
+from . import config
+
 ZERO_USAGE = {"prompt_tokens": 0, "completion_tokens": 0}
+
+
+def provider_of(ai: Mapping[str, Any]) -> str:
+    """``"anthropic"`` (Claude) or ``"openai"`` (any OpenAI-compatible service) for an ``ai`` settings dict.
+
+    Settings from ``config.load_ai_config`` always say. An older dict that does not is judged by its key
+    and address: a Claude key, or Anthropic's own address, means Claude.
+    """
+    named = ai.get("provider")
+    if named in (config.ANTHROPIC, config.OPENAI):
+        return named
+    return config.provider_for(str(ai.get("api_key") or ""), ai.get("base_url"))
 
 
 def chat(
@@ -27,7 +44,16 @@ def chat(
 
     With ``json_mode`` it asks for a JSON object, and retries without that option when the
     provider rejects it (not every OpenAI-compatible endpoint supports ``response_format``).
+
+    For Claude, ``temperature`` and ``timeout`` are not used (current Claude models reject a temperature, and
+    the SDK's streaming timeouts apply), ``max_tokens`` is the answer length expected with room to think added,
+    and ``json_mode`` becomes an instruction to reply with the JSON only.
     """
+    if provider_of(ai) == config.ANTHROPIC:
+        from . import claude_client
+
+        return claude_client.from_ai(ai, user, system=system, max_tokens=max_tokens, json_only=json_mode)
+
     from openai import OpenAI
 
     client = OpenAI(
@@ -68,6 +94,12 @@ def chat(
 
 class SearchUnavailable(RuntimeError):
     """The endpoint refused a web-search request (wrong model, no access, or no such feature)."""
+
+
+NO_CLAUDE_SEARCH = (
+    "AI web research is only built for OpenAI-compatible services with a search switch, so it is not used with Claude. "
+    "The live trend sources (on by default) and your own trends file work with any AI."
+)
 
 
 # Alibaba's documented switch is `enable_search`; the extra options below are tried first and
@@ -150,6 +182,8 @@ def chat_with_search_native(
     Request and reply shapes follow Alibaba's published description of this API. Like the
     compatible-mode call it tries the options form first and the plain switch second.
     """
+    if provider_of(ai) == config.ANTHROPIC:  # never send a Claude key down a path built for another provider's API
+        raise SearchUnavailable(NO_CLAUDE_SEARCH)
     import urllib.error
     import urllib.request
 
@@ -241,6 +275,8 @@ def chat_with_search(
     (``info["request"]``) and why any earlier form was refused (``info["refused"]``), for
     diagnostics. ``attempts`` restricts the forms tried, for testing one on its own.
     """
+    if provider_of(ai) == config.ANTHROPIC:  # never send a Claude key down a path built for another provider's API
+        raise SearchUnavailable(NO_CLAUDE_SEARCH)
     if api == "dashscope":
         return chat_with_search_native(
             ai, user, system=system, temperature=temperature, max_tokens=max_tokens, timeout=timeout,

@@ -1,9 +1,10 @@
-"""AI highlight detection from a transcript via OpenAI-compatible API."""
+"""AI highlight detection from a transcript via an OpenAI-compatible API, or via Claude."""
 
 import json
 import re
 from typing import Any, Callable
 
+from . import claude_client, config, llm
 from .constants import SAME_AS_TRANSCRIPT
 from .helpers import debug_log
 from .prompts import (
@@ -132,6 +133,8 @@ def find_highlights(
     log: LogFn | None = None,
     fit_length: FitFn | None = None,
     keep_all: bool = False,
+    provider: str | None = None,
+    effort: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Call the AI model and return (highlights, token_usage).
 
@@ -143,6 +146,10 @@ def find_highlights(
 
     ``keep_all`` is another: return every valid pick instead of the first ``num_clips`` in the
     model's own order, so a caller that ranks them afterwards sees all of them.
+
+    ``provider`` and ``effort`` are a third: ``provider="anthropic"`` (or a Claude key) sends the request to
+    Claude through ``claude_client`` instead of to an OpenAI-compatible endpoint; ``effort`` is how hard
+    Claude thinks. Without them nothing changes.
     """
     log = log or debug_log
     system_prompt = system_prompt or DEFAULT_HIGHLIGHT_PROMPT
@@ -188,6 +195,36 @@ def find_highlights(
     if temperature is None:
         temperature = DIRECTED_TEMPERATURE if direction_block else DEFAULT_TEMPERATURE
 
+    if llm.provider_of({"provider": provider, "api_key": api_key, "base_url": base_url}) == config.ANTHROPIC:
+        # CLIPPER addition. Claude takes no temperature (current models answer one with HTTP 400), so none is sent.
+        log(f"Finding highlights using {model} (Claude, through Anthropic's API)")
+        try:
+            result, token_usage = claude_client.message(
+                api_key=api_key, base_url=base_url, model=model, user=prompt, effort=effort
+            )
+        except claude_client.ClaudeError as e:
+            log(f"AI request failed: {str(e)[:300]}")
+            raise
+        result = claude_client.json_array_part(result)  # a sentence before the JSON, or fences around it, are not errors
+    else:
+        result, token_usage = _ask_openai_compatible(prompt, api_key, base_url, model, temperature, log)
+
+    if result.startswith("```"):
+        result = re.sub(r"```json?\n?", "", result)
+        result = re.sub(r"```\n?", "", result)
+
+    raw_highlights = parse_highlights_json(result, log)
+    requested_ranges = parse_requested_ranges(user_direction)
+    raw_highlights = _widen_short_highlights(raw_highlights, fit_length, requested_ranges, log)
+    valid = _validate_highlights(raw_highlights, num_clips, log, requested_ranges, keep_all=keep_all)
+    return valid, token_usage
+
+
+def _ask_openai_compatible(
+    prompt: str, api_key: str, base_url: str, model: str, temperature: float, log: LogFn
+) -> tuple[str, dict[str, int]]:
+    """Upstream's request to an OpenAI-compatible endpoint, moved here unchanged so ``find_highlights`` can
+    send the same prompt to Claude instead. Returns ``(reply text, token usage)``."""
     from openai import OpenAI
 
     client = OpenAI(
@@ -240,16 +277,7 @@ def find_highlights(
         "completion_tokens": getattr(usage, "completion_tokens", 0) if usage else 0,
     }
 
-    result = message.content.strip()
-    if result.startswith("```"):
-        result = re.sub(r"```json?\n?", "", result)
-        result = re.sub(r"```\n?", "", result)
-
-    raw_highlights = parse_highlights_json(result, log)
-    requested_ranges = parse_requested_ranges(user_direction)
-    raw_highlights = _widen_short_highlights(raw_highlights, fit_length, requested_ranges, log)
-    valid = _validate_highlights(raw_highlights, num_clips, log, requested_ranges, keep_all=keep_all)
-    return valid, token_usage
+    return message.content.strip(), token_usage
 
 
 def _error_context(raw: str, err: json.JSONDecodeError, width: int = 120) -> str:

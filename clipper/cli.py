@@ -297,7 +297,11 @@ def resolve_drama_share(args: argparse.Namespace, env: Mapping[str, str] | None 
 
 
 def _find(args: argparse.Namespace) -> dict[str, Any]:
-    ai = config.load_ai_config().as_dict()
+    cfg = config.load_ai_config()
+    for note in cfg.notes:  # settings left over from another service, ignored: say so once per run
+        _log(f"Note: {note}")
+    _log(f"AI: {cfg.describe()}")
+    ai = cfg.as_dict()
     ai.update(prompt_and_window_settings(args))
     cookies = resolve_cookies(args.cookies)
 
@@ -536,11 +540,25 @@ def search_ai_config(env: Mapping[str, str] | None = None) -> dict[str, str] | N
     (``CLIPPER_SEARCH_MODEL``) in case the chat model does not support web search."""
     env = os.environ if env is None else env
     try:
-        ai = config.load_ai_config(env).as_dict()
+        cfg = config.load_ai_config(env)
     except config.ConfigError:
         return None
+    if cfg.is_claude:
+        return None  # the search switches are other providers' (see search_problem)
+    ai = cfg.as_dict()
     ai["model"] = (env.get("CLIPPER_SEARCH_MODEL") or "").strip() or ai["model"]
     return ai
+
+
+def search_problem(env: Mapping[str, str] | None = None) -> str:
+    """Why AI web research cannot run right now, in a sentence (for when ``search_ai_config`` is None)."""
+    from . import llm
+
+    try:
+        cfg = config.load_ai_config(env)
+    except config.ConfigError as exc:
+        return str(exc)
+    return llm.NO_CLAUDE_SEARCH if cfg.is_claude else "AI web research is not available with these settings."
 
 
 def search_api(env: Mapping[str, str] | None = None) -> str:
@@ -549,7 +567,7 @@ def search_api(env: Mapping[str, str] | None = None) -> str:
     ``CLIPPER_SEARCH_API`` can force either. Left unset, an Alibaba endpoint uses the native API,
     which returns the sources a search used (the OpenAI-compatible endpoint never does, per
     Alibaba's docs) and was confirmed to run searches on a real account; any other provider uses
-    the OpenAI-compatible route.
+    the OpenAI-compatible route. (Claude has no route: see ``search_problem``.)
     """
     from urllib.parse import urlparse
 
@@ -559,7 +577,7 @@ def search_api(env: Mapping[str, str] | None = None) -> str:
         raise config.ConfigError(f"CLIPPER_SEARCH_API must be 'auto', 'compat' or 'dashscope', not {value!r}")
     if value != "auto":
         return value
-    host = urlparse(env.get("CLIPPER_BASE_URL") or config.DEFAULT_BASE_URL).hostname or ""
+    host = urlparse(env.get("CLIPPER_BASE_URL") or "").hostname or ""
     return "dashscope" if host.endswith("aliyuncs.com") else "compat"
 
 
@@ -623,7 +641,8 @@ def load_trends_for_run(
             )
             _log(trends_mod.describe(found))
             return found
-        _log(trends_mod.describe(None, explicit))  # wanted, but there is no key to do it with
+        _log(search_problem(env))  # wanted, but it cannot be done (no key, or Claude, which has no search route)
+        _log(trends_mod.describe(None, explicit))
         return None
     return None  # research is off and there is no list: nothing to report on every run
 
@@ -781,7 +800,7 @@ def _cmd_trends(args: argparse.Namespace) -> int:
     if args.diagnose:
         ai = search_ai_config()
         if ai is None:
-            raise config.ConfigError("No API key configured. Set CLIPPER_API_KEY in .env to test web search.")
+            raise config.ConfigError(search_problem())
         for line in trend_research.diagnose(ai, niche=niche, region=region, api=search_api()):
             print(line)
         return 0
@@ -810,7 +829,7 @@ def _cmd_trends(args: argparse.Namespace) -> int:
     if args.refresh:
         ai = search_ai_config()
         if ai is None:
-            raise config.ConfigError("No API key configured. Set CLIPPER_API_KEY in .env to research trends.")
+            raise config.ConfigError(search_problem())
         trend_research.auto_trends(ai, niche=niche, region=region, force=True, log=_log, api=search_api())
     report = trend_research.load_cache(cache_file)
     if report is None:
@@ -1046,11 +1065,21 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     cfg = None
     try:
         cfg = config.load_ai_config()
-        ok(f"AI: model {cfg.model} @ {cfg.base_url} (key {cfg.masked_key})")
+        ok(f"AI: {cfg.describe()}")
+        for note in cfg.notes:
+            warn(note)
     except config.ConfigError as exc:
         warn(str(exc))
 
-    if args.check_ai and cfg:
+    if args.check_ai and cfg and cfg.is_claude:
+        try:
+            from . import claude_client
+
+            text, usage = claude_client.from_ai(cfg.as_dict(), "Reply with the single word: ok", max_tokens=5)
+            ok(f"Claude answered: {text!r} ({usage['prompt_tokens']} tokens in, {usage['completion_tokens']} out)")
+        except Exception as exc:  # noqa: BLE001
+            fail(f"AI endpoint call failed: {str(exc)[:500]}")
+    elif args.check_ai and cfg:
         try:
             from openai import OpenAI
 

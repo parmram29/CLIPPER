@@ -77,6 +77,70 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
 
+class _ClaudeHandler(BaseHTTPRequestHandler):
+    """Anthropic's ``/v1/messages`` endpoint as the official SDK uses it (a server-sent event stream),
+    recording every request. Errors are answered in Anthropic's own error format."""
+
+    @staticmethod
+    def _event(name, payload):
+        return f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+
+    def do_POST(self):  # noqa: N802 - http.server API
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length) or b"{}")
+        server = self.server
+        server.requests.append({"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": body})
+
+        failure = server.errors.pop(0) if server.errors else server.always_fail
+        if failure:
+            status, kind, message, extra = failure
+            data = json.dumps({"type": "error", "error": {"type": kind, "message": message, **extra}, "request_id": "req_test"}).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
+        text = server.reply_fn(body) if server.reply_fn else server.reply
+        model = body.get("model", "claude-test")
+        usage = server.usage
+        message = {
+            "id": "msg_test", "type": "message", "role": "assistant", "model": model, "content": [],
+            "stop_reason": None, "stop_sequence": None,
+            "usage": {"input_tokens": usage[0], "output_tokens": 1},
+        }
+        out = [self._event("message_start", {"type": "message_start", "message": message}), self._event("ping", {"type": "ping"})]
+        index = 0
+        if server.thinking:  # the newest models always think first; the answer is the text block after it
+            out.append(self._event("content_block_start", {"type": "content_block_start", "index": index, "content_block": {"type": "thinking", "thinking": "", "signature": ""}}))
+            out.append(self._event("content_block_delta", {"type": "content_block_delta", "index": index, "delta": {"type": "thinking_delta", "thinking": "Let me weigh the moments. [{not the answer}]"}}))
+            out.append(self._event("content_block_delta", {"type": "content_block_delta", "index": index, "delta": {"type": "signature_delta", "signature": "sig"}}))
+            out.append(self._event("content_block_stop", {"type": "content_block_stop", "index": index}))
+            index += 1
+        if text:
+            out.append(self._event("content_block_start", {"type": "content_block_start", "index": index, "content_block": {"type": "text", "text": ""}}))
+            third = max(1, len(text) // 3)  # in pieces, like a real stream
+            for start in range(0, len(text), third):
+                out.append(self._event("content_block_delta", {"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": text[start : start + third]}}))
+            out.append(self._event("content_block_stop", {"type": "content_block_stop", "index": index}))
+        delta = {"stop_reason": server.stop_reason, "stop_sequence": None}
+        if server.stop_details:
+            delta["stop_details"] = server.stop_details
+        out.append(self._event("message_delta", {"type": "message_delta", "delta": delta, "usage": {"output_tokens": usage[1]}}))
+        out.append(self._event("message_stop", {"type": "message_stop"}))
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(b"".join(out))
+        self.wfile.flush()
+
+    def log_message(self, *args):  # silence request logging
+        pass
+
+
 @pytest.fixture(autouse=True)
 def _isolate_environment(monkeypatch, tmp_path_factory):
     """No test may read a real .env, use a real API key (which would spend real money), touch the
@@ -87,6 +151,8 @@ def _isolate_environment(monkeypatch, tmp_path_factory):
         "CLIPPER_NICHE", "CLIPPER_TRENDS", "CLIPPER_REGION", "CLIPPER_SEARCH_MODEL",
         "CLIPPER_COOKIES",  # the CLI sets this for the downloader; it must not leak from one test into the next
         "CLIPPER_TREND_SOURCES", "CLIPPER_DRAMA_SHARE",
+        # Claude settings, and the Anthropic variables the SDK would otherwise pick up by itself
+        "CLIPPER_PROVIDER", "CLIPPER_EFFORT", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("CLIPPER_AUTO_TRENDS", "0")  # tests of automatic research switch it on
@@ -117,6 +183,41 @@ def fake_llm(monkeypatch):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     server.base_url = f"http://127.0.0.1:{server.server_port}/compatible-mode/v1"
+    yield server
+    server.shutdown()
+    server.server_close()
+
+
+@pytest.fixture
+def fake_claude(monkeypatch):
+    """A local Anthropic API, spoken to by the real ``anthropic`` SDK.
+
+    Set ``.reply`` for a fixed answer, or ``.reply_fn(request_body)`` to answer per request; ``.thinking``
+    puts a thinking block before the answer (as the newest models do); ``.stop_reason`` / ``.stop_details``
+    end the reply early (a refusal, running out of room); ``.usage`` is ``(input, output)`` tokens.
+    ``.fail(status, kind, message, **extra)`` answers the next request with an Anthropic error;
+    ``.always_fail`` answers every request that way. Inspect ``.requests``; ``.base_url`` is where to point CLIPPER.
+    """
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    from clipper import claude_client
+
+    monkeypatch.setattr(claude_client, "RETRIES", 0)  # the SDK retries 429/5xx with pauses; tests read the error straight away
+
+    server = HTTPServer(("127.0.0.1", 0), _ClaudeHandler)
+    server.requests = []
+    server.reply = "[]"
+    server.reply_fn = None
+    server.thinking = False
+    server.stop_reason = "end_turn"
+    server.stop_details = None
+    server.usage = (11, 22)
+    server.errors = []
+    server.always_fail = None
+    server.fail = lambda status, kind, message, **extra: server.errors.append((status, kind, message, extra))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    server.base_url = f"http://127.0.0.1:{server.server_port}"
     yield server
     server.shutdown()
     server.server_close()

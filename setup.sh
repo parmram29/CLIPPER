@@ -34,7 +34,7 @@ if [ -f .env ]; then
   echo ".env already exists, leaving it alone"
 else
   cp .env.example .env
-  echo "Created .env from .env.example: add your CLIPPER_API_KEY"
+  echo "Created .env from .env.example: add your Claude key (from platform.claude.com) as CLIPPER_API_KEY"
 fi
 
 echo

@@ -199,7 +199,9 @@ def test_paths_cannot_escape_what_is_served(app, path):
 
 def test_state_says_what_is_set_up_without_ever_sending_the_key(app):
     status, state = app.get("/api/state")
-    assert status == 200 and state["ai"] == {"configured": True, "model": "qwen-plus", "hint": "...efgh"}
+    assert status == 200 and state["ai"] == {
+        "configured": True, "model": "claude-opus-5-5", "hint": "...efgh", "service": "Claude (Anthropic)", "notes": [],
+    }
     assert b"test-key-abcdefgh" not in json.dumps(state).encode()
     assert state["cookies"]["found"] is False and state["busy"] is None and state["styles"] == ["drama", "wild", "podcast"]
     (app.server.project_dir / "cookies.txt").write_text("x", encoding="utf-8")
@@ -469,3 +471,18 @@ def test_if_the_browser_cannot_be_opened_the_address_is_printed_instead(tmp_path
     assert srv.serve(tmp_path, "out", port=0) == 0
     assert "Open this in your browser: http://127.0.0.1:" in capsys.readouterr().out
     assert srv.serve(tmp_path, "out", port=0, open_browser=False) == 0
+
+
+def test_state_reports_old_alibaba_lines_that_were_ignored_instead_of_failing(app, monkeypatch):
+    # someone swaps only the key line of their .env: the app still works, and says what it skipped
+    monkeypatch.delenv("CLIPPER_API_KEY")
+    monkeypatch.delenv("CLIPPER_SKIP_DOTENV")
+    (app.server.project_dir / ".env").write_text(
+        "CLIPPER_API_KEY=sk-ant-test-1234\n"
+        "CLIPPER_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1\nCLIPPER_MODEL=qwen-flash\n",
+        encoding="utf-8",
+    )
+    ai = app.get("/api/state")[1]["ai"]
+    assert ai["configured"] is True and ai["service"] == "Claude (Anthropic)" and ai["model"] == "claude-opus-5-5"
+    assert len(ai["notes"]) == 2 and "qwen-flash" in ai["notes"][1]
+    assert "sk-ant-test-1234" not in json.dumps(ai)

@@ -209,9 +209,37 @@ HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
         "This video has no captions on YouTube, so CLIPPER can't read it yet. Try another video "
         "(most have automatic captions).",
     ),
+    # Claude's own problems come first: their messages mention CLIPPER_API_KEY, which the "no key" hint below also looks for
+    (
+        ("anthropic rejected the api key",),
+        "Claude refused your key. In the .env file in the CLIPPER folder, CLIPPER_API_KEY must be the key from "
+        "platform.claude.com (it starts with sk-ant-), with nothing else on the line (see Setup).",
+    ),
+    (
+        ("out of credit",),
+        "Your Anthropic account is out of credit. Add some at platform.claude.com (Billing). A Claude.ai "
+        "subscription does not cover API use.",
+    ),
+    (
+        ("monthly spend limit",),
+        "Your Anthropic account has reached its spend limit. Raise it at platform.claude.com, or wait for it to reset.",
+    ),
+    (
+        ("does not know the model",),
+        "Claude doesn't know the model named in the .env file. Delete the CLIPPER_MODEL line, or set "
+        "CLIPPER_MODEL=claude-opus-5-5.",
+    ),
+    (
+        ("busy or down right now", "sending requests too fast", "took too long to answer"),
+        "Claude is busy or slow right now. Wait a minute and try again.",
+    ),
+    (
+        ("could not reach anthropic",),
+        "CLIPPER couldn't reach Anthropic. Check the internet connection (and any VPN), then try again.",
+    ),
     (
         ("no api key", "clipper_api_key"),
-        "No AI key is set yet. Add your Alibaba key to the .env file in the CLIPPER folder (see Setup).",
+        "No AI key is set yet. Add your Claude key (from platform.claude.com) to the .env file in the CLIPPER folder (see Setup).",
     ),
     (
         ("freetieronly",),

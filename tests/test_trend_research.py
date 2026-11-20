@@ -671,9 +671,10 @@ def test_the_compatible_endpoint_diagnosis_explains_why_zero_sources_is_expected
 def test_search_api_setting():
     from clipper import cli
 
-    # unset: an Alibaba endpoint (the default one included) uses the native API, anything else the compatible one
-    assert cli.search_api({}) == "dashscope"
+    # unset: an Alibaba endpoint uses the native API, anything else the compatible one (there is no default Alibaba address any more)
+    assert cli.search_api({}) == "compat"
     assert cli.search_api({"CLIPPER_BASE_URL": "https://dashscope.aliyuncs.com/compatible-mode/v1"}) == "dashscope"
+    assert cli.search_api({"CLIPPER_BASE_URL": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"}) == "dashscope"
     assert cli.search_api({"CLIPPER_BASE_URL": "https://api.openai.com/v1"}) == "compat"
     assert cli.search_api({"CLIPPER_BASE_URL": "http://127.0.0.1:8000/v1"}) == "compat"
     assert cli.search_api({"CLIPPER_SEARCH_API": "", "CLIPPER_BASE_URL": "https://api.openai.com/v1"}) == "compat"
@@ -695,10 +696,23 @@ def test_the_cli_picks_the_native_route_for_an_alibaba_key_without_being_told_to
 
     monkeypatch.setattr(tr, "auto_trends", fake_auto)
     monkeypatch.chdir(tmp_path)
-    cli.load_trends_for_run(None, {"CLIPPER_API_KEY": "k", "CLIPPER_AUTO_TRENDS": "1"})
+    alibaba = {"CLIPPER_API_KEY": "k", "CLIPPER_BASE_URL": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "CLIPPER_AUTO_TRENDS": "1"}
+    cli.load_trends_for_run(None, alibaba)
     assert seen["api"] == "dashscope"
-    cli.load_trends_for_run(None, {"CLIPPER_API_KEY": "k", "CLIPPER_BASE_URL": "https://api.openai.com/v1", "CLIPPER_AUTO_TRENDS": "1"})
+    other = {"CLIPPER_API_KEY": "k", "CLIPPER_BASE_URL": "https://api.openai.com/v1", "CLIPPER_MODEL": "m", "CLIPPER_AUTO_TRENDS": "1"}
+    cli.load_trends_for_run(None, other)
     assert seen["api"] == "compat"
+
+
+def test_with_claude_the_cli_does_not_start_web_research_and_says_why(monkeypatch, tmp_path, capsys):
+    from clipper import cli
+
+    called = []
+    monkeypatch.setattr(tr, "auto_trends", lambda *a, **k: called.append(1))
+    monkeypatch.chdir(tmp_path)
+    found = cli.load_trends_for_run(None, {"CLIPPER_API_KEY": "sk-ant-test-1234", "CLIPPER_AUTO_TRENDS": "1"})  # pragma: allowlist secret
+    assert found is None and called == []
+    assert "not used with Claude" in capsys.readouterr().out
 
 
 def test_the_cli_uses_the_native_api_when_asked(monkeypatch, fake_llm, tmp_path, capsys):

@@ -369,7 +369,10 @@ class Handler(BaseHTTPRequestHandler):
         ai: dict[str, Any] = {"configured": False, "model": "", "hint": ""}
         try:
             cfg = config.load_ai_config(env)
-            ai = {"configured": True, "model": cfg.model, "hint": cfg.masked_key}
+            ai = {
+                "configured": True, "model": cfg.model, "hint": cfg.masked_key,
+                "service": cfg.service, "notes": list(cfg.notes),  # notes: settings left over from another service, ignored
+            }
         except config.ConfigError as exc:
             ai["problem"] = str(exc)
         cookies = Path(env.get("CLIPPER_COOKIES") or "cookies.txt")
