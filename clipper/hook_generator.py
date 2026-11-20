@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from . import encoding
 from .helpers import get_ffmpeg_path
 
 LogFn = Callable[[str], None]
@@ -212,20 +213,22 @@ def generate_hook(
     # Step 3: Overlay text onto the video for the first `duration` seconds.
     # The underlying video keeps playing and keeps its audio track.
     log("Burning hook text onto video...")
-    overlay_cmd = [
-        ffmpeg_path, "-y",
-        "-i", input_video_path,
-        "-i", overlay_png,
-        "-filter_complex",
-        f"[0:v][1:v]overlay=0:0:enable='lte(t,{duration})'[v]",
-        "-map", "[v]",
-        "-map", "0:a?",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "copy",
-        output_path,
-    ]
-    result = subprocess.run(overlay_cmd, capture_output=True, text=True, creationflags=_SUBPROCESS_FLAGS)
+    def overlay_cmd(video_enc: list[str]) -> list[str]:
+        return [
+            ffmpeg_path, "-y",
+            "-i", input_video_path,
+            "-i", overlay_png,
+            "-filter_complex",
+            f"[0:v][1:v]overlay=0:0:enable='lte(t,{duration})'[v]",
+            "-map", "[v]",
+            "-map", "0:a?",
+            *video_enc,  # CLIPPER: the shared encoder choice (encoding.py), not a fixed libx264 "fast"
+            "-pix_fmt", "yuv420p",
+            "-c:a", "copy",
+            output_path,
+        ]
+
+    result = encoding.run(overlay_cmd, log=log)
     if result.returncode != 0:
         raise RuntimeError(f"Failed to overlay hook text: {result.stderr[-500:]}")
 

@@ -52,6 +52,8 @@ You need at least your AI key.
 | `CLIPPER_API_KEY` | Your Claude key from the [Claude Console](https://platform.claude.com/settings/keys). It starts with `sk-ant-`. Required. |
 | `CLIPPER_MODEL` | Which Claude model. The default is `claude-opus-5-5`. `claude-sonnet-5-5` costs about half as much per token and `claude-haiku-5-5` about a fortieth. Optional. |
 | `CLIPPER_EFFORT` | How hard Claude thinks before it answers: `low`, `medium`, `high`, `xhigh` or `max`. Optional. Left empty it uses the model's own default (`medium` on `claude-opus-5-5` and `claude-haiku-5-5`, `high` on most others). `low` makes Claude think less, which is quicker and cheaper; `high` and above think more. |
+| `CLIPPER_MAX_FPS` | Frames per second a clip keeps. The default is `30`: 60 fps footage is thinned to 30, which halves the work. `off` keeps the source's rate. Optional. |
+| `CLIPPER_MAX_HEIGHT` | The tallest video to download for a clip. The default is `720` for the centered layout and `1080` otherwise. Set `1080` for the sharpest centered clips. Optional. |
 | `CLIPPER_NICHE` | What your account is about, like `reality TV drama`. Optional. Used for captions. |
 | `CLIPPER_REGION` | Where your audience is, like `United States`. Optional. Only used if you turn trend research on. |
 
@@ -243,6 +245,10 @@ Run `clipper doctor` first. Most problems show up there.
 **`pip` can't find `mediapipe` (Intel Macs)**: MediaPipe's current releases only ship Mac wheels for Apple Silicon, and the last release with Intel wheels covers Python 3.9 to 3.12 only ([PyPI files](https://pypi.org/project/mediapipe/#files)). `setup.sh` skips it, and CLIPPER uses a centered crop instead. For face tracking on an Intel Mac, make a fresh environment with Python 3.9 to 3.12 and run `pip install 'clipper[face]'`. On Debian or Ubuntu, face tracking also needs `sudo apt install libegl1 libgles2`.
 
 **`CERTIFICATE_VERIFY_FAILED`**: some Python installs on macOS ship without a list of trusted certificates. CLIPPER switches to the one from `certifi` automatically. If it still fails, something on your network (a work or school network, a VPN, or security software) may be intercepting HTTPS connections.
+
+**A clip takes many minutes to make**: after every clip CLIPPER prints a `Timing:` line (`cut`, `layout`, `hook`, `captions`) so you can see which step is slow. The work is video encoding, and the biggest single factor is whether your computer's own video encoder is used. `clipper doctor` has a `video encoder:` line that says which one will be: on a Mac it should say `h264_videotoolbox`, which every Mac has (Intel ones included); `libx264 on the CPU` means none worked, and the reason is on that line. The other two levers are `CLIPPER_MAX_FPS` and `CLIPPER_MAX_HEIGHT` (see the table above).
+
+Measured, and what wasn't: 30 seconds of 60 fps 1080p test footage took 118 s for the four steps before this was changed and 33 s after, on a 4-core Linux machine using only the CPU encoder, and the old and new pictures compared at SSIM 0.996 / PSNR 43.5 dB (differences that small can't be seen). The old `download` step turned out to be re-encoding the whole section with ffmpeg's default (slow) settings: that is yt-dlp's documented behaviour when it is told to cut exactly, and it took 5 minutes for a 78-second section on a MacBook Air. The Mac hardware encoder was not measured, because it only exists on a Mac, so that part is expected to help rather than known to.
 
 **"Anthropic rejected the API key (401)"**: `CLIPPER_API_KEY` in `.env` isn't a valid Claude key. It should start with `sk-ant-`, be on one line with nothing else, and come from the [Console](https://platform.claude.com/settings/keys). A key that was deleted or copied with a missing piece fails the same way. `clipper doctor --check-ai` shows the result of one call.
 

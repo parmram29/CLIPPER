@@ -20,6 +20,7 @@ import numpy as np
 # `--reframe centered`. MediaPipe's current releases ship macOS wheels for Apple
 # Silicon only, so an Intel Mac on Python 3.13+ cannot install it at all.
 
+from . import encoding
 from .helpers import get_face_landmarker_model_path, get_ffmpeg_path
 
 LogFn = Callable[[str], None]
@@ -371,48 +372,37 @@ def convert_to_portrait_centered(
     cap.release()
     log(f"Source: {fps:.1f}fps, {total_frames} frames, {duration:.1f}s")
 
+    # CLIPPER: a source faster than the cap (60 fps gameplay, by default capped at 30) is thinned out before anything else
+    # touches it, so the blur, the overlay and the encoder each handle half as many frames.
+    fps_cap = encoding.fps_filter(fps, encoding.max_fps())
+    if fps_cap:
+        log(f"Keeping {fps_cap.removeprefix('fps=')} fps (the source has {fps:.0f}); set CLIPPER_MAX_FPS=off to keep them all")
+    lead = f"{fps_cap}," if fps_cap else ""
+
     # Build filtergraph
     if background == "blurred":
+        # CLIPPER: the background is blurred at a quarter of its size and then enlarged. A blur hides detail anyway, so
+        # the result is the same to the eye (sigma 20 at 1080 wide is sigma 5 at 270 wide), and it is 16 times fewer
+        # pixels per frame: upstream blurred the full 1080x1920 picture, the slowest filter in the whole pipeline.
         vf = (
-            "[0:v]split=2[bg][fg];"
-            "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
-            "crop=1080:1920,gblur=sigma=20[bgblur];"
+            f"[0:v]{lead}split=2[bg][fg];"
+            "[bg]scale=270:480:force_original_aspect_ratio=increase,"
+            "crop=270:480,gblur=sigma=5,scale=1080:1920:flags=bilinear[bgblur];"
             "[fg]scale=1080:1920:force_original_aspect_ratio=decrease[fgfit];"
             "[bgblur][fgfit]overlay=(W-w)/2:(H-h)/2[v]"
         )
         filter_flags = ["-filter_complex", vf, "-map", "[v]", "-map", "0:a?"]
     else:
         vf = (
-            "scale=1080:1920:force_original_aspect_ratio=decrease,"
+            f"{lead}scale=1080:1920:force_original_aspect_ratio=decrease,"
             "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"
         )
         filter_flags = ["-vf", vf]
 
-    # Pick encoder — prefer GPU hardware encoder when available
-    from .gpu import detect_gpu
-    gpu_info = detect_gpu()
-    enc = gpu_info.get("encoder", {})
-    enc_name = enc.get("name") if enc.get("available") else None
-    enc_preset = enc.get("preset")
-
-    def build_video_enc_args(name: str | None, preset: str | None) -> list[str]:
-        if name == "h264_nvenc":
-            args = ["-c:v", name]
-            if preset:
-                args += ["-preset", preset]
-            args += ["-rc", "vbr", "-cq", "23"]
-            return args
-        if name:
-            args = ["-c:v", name]
-            if preset:
-                args += ["-preset", preset]
-            return args
-        return ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]
-
-    if enc_name:
-        log(f"Using GPU encoder: {enc_name} (preset={enc_preset}) — {gpu_info['gpu']['name']}")
-    else:
-        log(f"Using CPU encoder: libx264 ({enc.get('reason', 'No GPU detected')})")
+    # CLIPPER: the encoder is chosen once for every step (see encoding.py): this computer's hardware encoder when it works,
+    # VideoToolbox on every Mac included, else libx264 at veryfast.
+    encoder = encoding.choose()
+    encoding.announce(encoder, log)
 
     def run_encode(video_enc_args: list[str], tag: str) -> tuple[int, str]:
         cmd = [
@@ -452,22 +442,20 @@ def convert_to_portrait_centered(
         proc.wait()
         return proc.returncode, "".join(stderr_chunks)
 
-    video_enc = build_video_enc_args(enc_name, enc_preset)
-    tag = enc_name or "libx264"
-    returncode, stderr_text = run_encode(video_enc, tag)
+    returncode, stderr_text = run_encode(list(encoder.args), encoder.name)
 
     # Self-heal: if the hardware encoder failed at runtime (despite passing
     # the build-time `-encoders` check and even the one-frame probe — driver
     # state can still flip mid-encode on Optimus/old Maxwell parts), retry
     # exactly once with the software encoder so the user still gets a clip.
-    if returncode != 0 and enc_name and enc_name != "libx264":
+    if returncode != 0 and encoder.hardware:
         err_tail = "\n".join(stderr_text.strip().splitlines()[-12:])
         log(
-            f"❌ GPU encoder {enc_name} failed (exit code {returncode}). "
+            f"❌ GPU encoder {encoder.name} failed (exit code {returncode}). "
             f"Retrying with CPU libx264. ffmpeg stderr:\n{err_tail}"
         )
-        video_enc = build_video_enc_args(None, None)
-        returncode, stderr_text = run_encode(video_enc, "libx264")
+        encoding.disable(encoder.name)  # the hook, captions and later clips use libx264 too, without trying it again
+        returncode, stderr_text = run_encode(list(encoding.SOFTWARE_ARGS), "libx264")
 
     if returncode != 0:
         err_tail = "\n".join(stderr_text.strip().splitlines()[-20:])

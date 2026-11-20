@@ -43,6 +43,10 @@ this repo, as the license requires.
   `temperature` (current Claude models reject it), room to think added to `max_tokens`, text blocks only, refusals and
   running out of room reported as errors, every API error explained in plain words
 - `clipper/llm.py`: a small chat helper for the calls above; sends each to Claude or to an OpenAI-compatible endpoint
+- `clipper/encoding.py`: one choice of video encoder for every step that writes a video (the section cut, the portrait
+  layout, the hook, the captions, the watermark): the computer's hardware encoder when a test encode shows it works,
+  otherwise libx264 `veryfast`; a hardware encoder that fails is replaced by libx264 and not tried again that run. Also
+  the frame-rate cap (`CLIPPER_MAX_FPS`) and the source height (`CLIPPER_MAX_HEIGHT`)
 - `clipper/drama.py`: what counts as a drama scene (a separate AI judgement of 6+ out of 10), the 6-of-8 bar,
   the drama-first ranking, and the report behind `clipper check`. `windowing.py` does the judging and the
   second look for confrontations; `viral_prompt.py` carries the "stop-the-thumb" rules
@@ -90,6 +94,19 @@ this repo, as the license requires.
   non-Claude key, nothing changes.
 - `clipper/subtitle_downloader.py`: the saved video info also keeps the video's own `tags`, which feed the hashtag
   suggestions. Nothing else about the download changed.
+- Rendering speed. A clip cost a MacBook Air an estimated 20 minutes (yt-dlp's section cut re-encoded the whole section at
+  ffmpeg's defaults while reporting nothing, then three more full encodes on the CPU):
+  - `clipper/gpu.py`: the result is remembered for the run; on any Mac the encoder is found by testing VideoToolbox, not by
+    recognising the graphics card's name (upstream matched only Apple silicon chip names, so Intel Macs always got the CPU);
+    VideoToolbox is given a bitrate (without one it writes about 200 kbit/s); the test encode takes the encoder's real settings.
+  - `clipper/portrait.py`: the blurred background is blurred at a quarter of its size and enlarged (16x fewer pixels, SSIM 0.998
+    against the full-size blur); a source faster than the cap is thinned first; the encoder comes from `encoding.py`.
+  - `clipper/hook_generator.py`, `clipper/caption_generator.py`, `clipper/watermark.py`: `libx264 -preset fast -crf 18` replaced
+    by the shared encoder choice.
+  - `clipper/video_processor.py`: the section cut passes ffmpeg fast encoder settings (the cut stays frame-exact, which the
+    caption timing needs); the format choice takes a `max_height`; if ffmpeg rejects the settings it cuts once more with its
+    defaults before the last resort; the "waiting for download data" message no longer claims what it cannot know.
+  - `clipper/clip_processor.py`: asks for 720 lines in the centered layout and prints a `Timing:` line per clip.
 - `clipper/constants.py`: one docstring now names the new package.
 - `clipper/helpers.py`: a `# nosec B310` comment on the one-time face-model download, which uses a
   fixed https URL, so the security scanner `bandit` does not flag it. No behaviour change.

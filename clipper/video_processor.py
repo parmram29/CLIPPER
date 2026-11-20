@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from . import encoding
 from .cookies import validate_cookies
 from .helpers import debug_log, get_deno_path, get_ffmpeg_path, is_ytdlp_module_available
 from .helpers import _get_app_dir
@@ -183,9 +184,11 @@ def download_video_section(
     end_time: str,
     output_path: str,
     log: LogFn | None = None,
+    max_height: int = 1080,
 ) -> str:
     """Download a specific section of a YouTube video.
 
+    ``max_height`` (CLIPPER) is the tallest source to fetch; the centered layout asks for 720, which is all it can show.
     Returns path to the downloaded file.
     """
     log = log or debug_log
@@ -193,7 +196,7 @@ def download_video_section(
     end_clean = end_time.replace(",", ".")
 
     if is_ytdlp_module_available():
-        return _download_section_module(url, start_clean, end_clean, output_path, log)
+        return _download_section_module(url, start_clean, end_clean, output_path, log, max_height)
     else:
         raise RuntimeError(
             "yt-dlp Python module is required for downloading video sections. "
@@ -207,6 +210,7 @@ def _download_section_module(
     end_time: str,
     output_path: str,
     log: LogFn,
+    max_height: int = 1080,
 ) -> str:
     import yt_dlp
 
@@ -222,11 +226,12 @@ def _download_section_module(
     # 1440p/2160p source crawls at ~1-2x realtime on CPU (the "stuck for hours"
     # symptom). H.264 1080p keeps the cut cheap and speeds up the later portrait
     # encode too (smaller input). Falls back progressively if avc1 is absent.
+    # CLIPPER: the cap is a parameter (default 1080, as upstream); the centered layout passes 720.
     format_selector = (
-        "bestvideo[height<=1080][vcodec^=avc1]+bestaudio[acodec^=mp4a]/"
-        "bestvideo[height<=1080][vcodec^=avc1]+bestaudio/"
-        "bestvideo[height<=1080]+bestaudio/"
-        "best[height<=1080]/best"
+        f"bestvideo[height<={max_height}][vcodec^=avc1]+bestaudio[acodec^=mp4a]/"
+        f"bestvideo[height<={max_height}][vcodec^=avc1]+bestaudio/"
+        f"bestvideo[height<={max_height}]+bestaudio/"
+        f"best[height<={max_height}]/best"
     )
 
     ydl_opts: dict[str, Any] = {
@@ -245,6 +250,10 @@ def _download_section_module(
             None, [(_parse_timestamp(start_time), _parse_timestamp(end_time))]
         ),
         "force_keyframes_at_cuts": True,
+        # CLIPPER: forcing keyframes at the cuts (the exact start the captions need) makes yt-dlp's ffmpeg RE-ENCODE the whole
+        # section, with ffmpeg's own defaults (libx264 "medium": about 5 minutes for 78 seconds of 1080p60 on a MacBook Air,
+        # with no progress shown). The next step encodes it again anyway, so this one is written as quickly as possible.
+        "external_downloader_args": {"ffmpeg_o": list(encoding.CUT_ARGS)},
         "cookiefile": cookies_path,
         # CLIPPER: CLIPPER_YTDLP_VERBOSE=1 turns on yt-dlp's debug output and error tracebacks.
         "verbose": bool(os.environ.get("CLIPPER_YTDLP_VERBOSE")),
@@ -300,7 +309,6 @@ def _download_section_module(
         every = 15
         while not stop_evt.wait(every):
             elapsed = int(time.monotonic() - started)
-            since_last_log = int(time.monotonic() - download_state["last_log_ts"])
             pct = download_state["last_pct"]
             detail = download_state["last_detail"]
             if pct is not None:
@@ -308,17 +316,26 @@ def _download_section_module(
             elif detail:
                 log(f"⏳ Still downloading: {detail}, {elapsed}s elapsed (no progress % yet)")
             else:
-                log(
-                    f"⏳ Still waiting for download data... {elapsed}s elapsed, "
-                    f"{since_last_log}s since last activity"
-                )
+                log(f"⏳ Cutting this section out of the video (ffmpeg shows no progress for this step)... {elapsed}s so far")
 
     hb_thread = threading.Thread(target=heartbeat, daemon=True, name="yt-dlp-heartbeat")
     hb_thread.start()
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+        except Exception as first_error:
+            # CLIPPER: if ffmpeg objects to the quick-encode settings (an unusual build), cut once more with ffmpeg's own
+            # defaults, as upstream did, before the last resort below, which downloads the WHOLE video.
+            first = str(first_error).lower()
+            if "ffmpeg" in first and "403" not in first and "forbidden" not in first:
+                log("The quick cut did not work; cutting again with ffmpeg's defaults (slower)...")
+                plain_opts = {k: v for k, v in ydl_opts.items() if k != "external_downloader_args"}
+                with yt_dlp.YoutubeDL(plain_opts) as ydl:
+                    ydl.download([url])
+            else:
+                raise
     except Exception as e:
         msg = str(e)
         log(f"Section download failed: {msg[:200]}")

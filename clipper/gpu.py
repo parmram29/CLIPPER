@@ -25,6 +25,12 @@ PRESET_MAP = {
     "apple": None,
 }
 
+# CLIPPER: VideoToolbox is told its bitrate, because without one it writes about 200 kbit/s, which is
+# unwatchable at 1080x1920. The test encode below uses the same settings as a real one, so a Mac whose encoder
+# cannot do them is found out before a render starts, not in the middle of one.
+HARDWARE_BITRATE = "10M"
+VIDEOTOOLBOX_ARGS = ("-b:v", HARDWARE_BITRATE, "-profile:v", "high")
+
 
 def _run(cmd: list[str], timeout: int = 5) -> subprocess.CompletedProcess | None:
     try:
@@ -154,7 +160,9 @@ def _available_encoders(ffmpeg_path: str) -> list[str]:
     return encoders
 
 
-def _probe_encoder(ffmpeg_path: str, encoder_name: str, timeout: int = 20) -> tuple[bool, str | None]:
+def _probe_encoder(
+    ffmpeg_path: str, encoder_name: str, timeout: int = 20, extra_args: tuple[str, ...] = ()
+) -> tuple[bool, str | None]:
     """Actually try encoding one tiny frame with the given hardware encoder.
 
     Many GPU/video-controller WMI entries exist alongside an inactive or
@@ -183,6 +191,7 @@ def _probe_encoder(ffmpeg_path: str, encoder_name: str, timeout: int = 20) -> tu
                 "-i", "color=black:s=320x240:d=0.04",
                 "-frames:v", "1",
                 "-c:v", encoder_name,
+                *extra_args,
                 out_path,
             ],
             capture_output=True,
@@ -205,8 +214,22 @@ def _probe_encoder(ffmpeg_path: str, encoder_name: str, timeout: int = 20) -> tu
             pass
 
 
+_DETECTED: dict | None = None
+
+
+def _is_mac() -> bool:
+    return sys.platform == "darwin"
+
+
+def reset_detection() -> None:
+    """Forget what ``detect_gpu`` found (for tests, or after changing ffmpeg)."""
+    global _DETECTED
+    _DETECTED = None
+
+
 def detect_gpu() -> dict:
-    """Detect GPU and recommended FFmpeg encoder.
+    """Detect GPU and recommended FFmpeg encoder. Looked up once per run and remembered: every step of every
+    clip asks, and detection starts programs (and, on a Mac, a slow system report).
 
     Returns dict:
         {
@@ -214,7 +237,34 @@ def detect_gpu() -> dict:
           "encoder": {"name", "preset", "available", "reason"}
         }
     """
+    global _DETECTED
+    if _DETECTED is None:
+        _DETECTED = _detect_gpu_uncached()
+    return _DETECTED
+
+
+def _detect_mac_encoder(ffmpeg_path: str) -> dict:
+    """CLIPPER: every Mac has Apple's video encoder (VideoToolbox), Intel Macs included: they use the video engine of the
+    Intel or AMD graphics. Upstream only recognised Apple silicon by its chip name, so on an Intel Mac nothing was found
+    and every render ran on the CPU, which on a MacBook Air takes many minutes per clip.
+    """
+    gpu = {"type": "apple", "name": "this Mac's video encoder (VideoToolbox)", "available": True}
+    off = {"gpu": {"type": None, "name": "No hardware encoder", "available": False}}
+    if "h264_videotoolbox" not in _available_encoders(ffmpeg_path):
+        return {**off, "encoder": {"name": None, "preset": None, "available": False,
+                                   "reason": "this ffmpeg has no h264_videotoolbox encoder — will use CPU (libx264)"}}
+    ok, err = _probe_encoder(ffmpeg_path, "h264_videotoolbox", extra_args=VIDEOTOOLBOX_ARGS)
+    if not ok:
+        return {**off, "encoder": {"name": None, "preset": None, "available": False,
+                                   "reason": f"VideoToolbox did not start on this Mac — will use CPU (libx264). Probe stderr: {(err or '')[:240]}"}}
+    return {"gpu": gpu, "encoder": {"name": "h264_videotoolbox", "preset": None, "available": True,
+                                    "reason": "Using this Mac's built-in video encoder"}}
+
+
+def _detect_gpu_uncached() -> dict:
     ffmpeg_path = get_ffmpeg_path()
+    if _is_mac():
+        return _detect_mac_encoder(ffmpeg_path)
     gpu = _detect_gpu_hardware()
 
     if not gpu["available"]:

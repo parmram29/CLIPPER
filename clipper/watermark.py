@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
+from . import encoding
 from .helpers import get_ffmpeg_path
 
 LogFn = Callable[[str], None]
@@ -108,15 +109,18 @@ def apply_watermark(
     filter_complex = ";".join(filter_parts)
 
     log("Applying watermark overlay...")
-    cmd = [
-        ffmpeg_path, "-y",
-        *inputs,
-        "-filter_complex", filter_complex,
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-        "-c:a", "copy",
-        output_path,
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, creationflags=_SUBPROCESS_FLAGS)
+    def cmd(video_enc: list[str]) -> list[str]:
+        return [
+            ffmpeg_path, "-y",
+            *inputs,
+            "-filter_complex", filter_complex,
+            *video_enc,  # CLIPPER: the shared encoder choice (encoding.py), not a fixed libx264 "fast"
+            "-pix_fmt", "yuv420p",
+            "-c:a", "copy",
+            output_path,
+        ]
+
+    result = encoding.run(cmd, log=log)
 
     if result.returncode != 0:
         raise RuntimeError(f"Watermark overlay failed: {result.stderr[-500:]}")

@@ -153,11 +153,17 @@ def _isolate_environment(monkeypatch, tmp_path_factory):
         "CLIPPER_TREND_SOURCES", "CLIPPER_DRAMA_SHARE",
         # Claude settings, and the Anthropic variables the SDK would otherwise pick up by itself
         "CLIPPER_PROVIDER", "CLIPPER_EFFORT", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+        "CLIPPER_MAX_FPS", "CLIPPER_MAX_HEIGHT",  # how much video there is to encode
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("CLIPPER_AUTO_TRENDS", "0")  # tests of automatic research switch it on
     monkeypatch.setenv("CLIPPER_LIVE_TRENDS", "0")  # tests of the live feeds switch it on and fake the network
     monkeypatch.setenv("CLIPPER_CACHE_DIR", str(tmp_path_factory.mktemp("clipper-cache")))
+    from clipper import encoding
+
+    encoding.reset()  # the chosen encoder, and any that failed, are remembered for a run: not across tests
+    yield
+    encoding.reset()
 
 
 @pytest.fixture

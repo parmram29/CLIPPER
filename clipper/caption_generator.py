@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 import cv2
 
+from . import encoding
 from .helpers import get_ffmpeg_path
 
 LogFn = Callable[[str], None]
@@ -174,15 +175,18 @@ def generate_captions_from_words(
     log("Burning captions into video...")
     ass_path_escaped = ass_file.replace("\\", "/").replace(":", "\\:")
 
-    burn_cmd = [
-        ffmpeg_path, "-y",
-        "-i", input_video_path,
-        "-vf", f"ass='{ass_path_escaped}'",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-        "-c:a", "copy",
-        output_path,
-    ]
-    result = subprocess.run(burn_cmd, capture_output=True, text=True, creationflags=_SUBPROCESS_FLAGS)
+    def burn_cmd(video_enc: list[str]) -> list[str]:
+        return [
+            ffmpeg_path, "-y",
+            "-i", input_video_path,
+            "-vf", f"ass='{ass_path_escaped}'",
+            *video_enc,  # CLIPPER: the shared encoder choice (encoding.py), not a fixed libx264 "fast"
+            "-pix_fmt", "yuv420p",
+            "-c:a", "copy",
+            output_path,
+        ]
+
+    result = encoding.run(burn_cmd, log=log)
 
     # Clean up ASS file
     try:

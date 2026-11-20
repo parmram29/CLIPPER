@@ -1007,6 +1007,16 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     except (OSError, subprocess.SubprocessError) as exc:
         fail(f"ffmpeg not runnable ({ffmpeg}): {exc}. {_ffmpeg_install_hint()}")
 
+    # CLIPPER: which encoder every render step will use (see encoding.py). On a laptop the hardware one is what makes
+    # a clip take a minute instead of many; tried with a test frame, so this says what will really happen.
+    from . import encoding
+
+    encoder = encoding.choose()
+    if encoder.hardware:
+        ok(f"video encoder: {encoder.name}, built into this computer ({encoder.reason})")
+    else:
+        warn(f"video encoder: libx264 on the CPU, which is slow on a laptop ({encoder.reason})")
+
     for module, purpose in (
         ("yt_dlp", "downloads"),
         ("cv2", "video frames"),
