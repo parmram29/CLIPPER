@@ -35,6 +35,7 @@ def test_every_third_party_module_clipper_imports_is_declared():
         "dotenv": "python_dotenv",
         "yt_dlp": "yt_dlp",
         "openai": "openai",
+        "anthropic": "anthropic",
         "numpy": "numpy",
         "certifi": "certifi",
     }

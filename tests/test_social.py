@@ -139,9 +139,24 @@ def test_stale_trends_are_flagged_to_the_model(tmp_path):
     assert "STALE" not in _prompt(trends=_trends(tmp_path, "#fresh", age_days=2))
 
 
-def test_the_prompt_limits_trending_tags_to_one_and_only_if_listed_and_fitting():
+def test_the_prompt_limits_trending_tags_to_two_and_only_if_listed_and_fitting():
     prompt = _prompt()
-    assert "at most ONE trending tag" in prompt and "appears in the trend list" in prompt
+    assert "up to TWO current tags" in prompt and "come from the trend list" in prompt
+    assert "genuinely fit this clip" in prompt
+
+
+def test_the_prompt_tells_the_model_not_to_waste_a_slot_on_fyp_tags():
+    prompt = _prompt()
+    assert "Do not use #fyp, #foryou or #foryoupage" in prompt
+
+
+def test_live_feed_trends_are_labelled_as_not_tiktoks_own_data_and_only_for_clips_they_fit():
+    feeds = trends_mod.Trends(None, "Hot right now: Love Is Blind", 0.1, ("loveisblind",), False, False, source="feeds", verified=True)
+    prompt = _prompt(trends=feeds)
+    assert "NOT TikTok's own data" in prompt and "from public feeds" in prompt
+    assert "Hot right now: Love Is Blind" in prompt
+    assert "the same show, person, event or subject" in prompt and "If none fit, ignore them" in prompt
+    assert "supplied by the user" not in prompt  # it must not be passed off as the user's own list
 
 
 def test_the_niche_is_passed_on_when_given():

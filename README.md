@@ -49,13 +49,19 @@ You need at least your AI key.
 
 | Setting | What it's for |
 |---|---|
-| `CLIPPER_API_KEY` | Your key for the AI model. Required. |
-| `CLIPPER_BASE_URL` | Where the model lives. The default is Alibaba's Qwen (Singapore). Any OpenAI-compatible service works. |
-| `CLIPPER_MODEL` | Which model to use. The default is `qwen-plus`; `qwen-flash` is cheaper and fine for picking highlights. |
+| `CLIPPER_API_KEY` | Your Claude key from the [Claude Console](https://platform.claude.com/settings/keys). It starts with `sk-ant-`. Required. |
+| `CLIPPER_MODEL` | Which Claude model. The default is `claude-opus-5-5`. `claude-sonnet-5-5` costs about half as much per token and `claude-haiku-5-5` about a fortieth. Optional. |
+| `CLIPPER_EFFORT` | How hard Claude thinks before it answers: `low`, `medium`, `high`, `xhigh` or `max`. Optional. Left empty it uses the model's own default (`medium` on `claude-opus-5-5` and `claude-haiku-5-5`, `high` on most others). `low` makes Claude think less, which is quicker and cheaper; `high` and above think more. |
+| `CLIPPER_MAX_FPS` | Frames per second a clip keeps. The default is `30`: 60 fps footage is thinned to 30, which halves the work. `off` keeps the source's rate. Optional. |
+| `CLIPPER_MAX_HEIGHT` | The tallest video to download for a clip. The default is `720` for the centered layout and `1080` otherwise. Set `1080` for the sharpest centered clips. Optional. |
 | `CLIPPER_NICHE` | What your account is about, like `reality TV drama`. Optional. Used for captions. |
 | `CLIPPER_REGION` | Where your audience is, like `United States`. Optional. Only used if you turn trend research on. |
 
-Alibaba keys belong to a region. If yours came from the Beijing side, set `CLIPPER_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1`.
+The key is for Anthropic's API, which is billed separately from a Claude.ai subscription: make the key in the Console and add a few dollars of credit there. (Claude Max, Ultra and Team plans include monthly API credits that you claim by linking a Console organization to the plan; Free and Pro plans don't. See [API credits for subscribers](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers).) Prices are per million tokens: `claude-opus-5-5` is $4 in and $20 out, `claude-sonnet-5-5` $2 and $10, `claude-haiku-5-5` $0.10 and $0.50 (for prompts up to 100,000 tokens), as listed on Anthropic's [pricing page](https://platform.claude.com/docs/en/about-claude/pricing) on 2026-11-20. Claude thinks before it answers, and that thinking is billed as output tokens. After every run CLIPPER prints the real token counts (`AI token usage`), so you can work out what a run cost.
+
+**Using a different AI service.** Any OpenAI-compatible service still works (Alibaba's Qwen, OpenAI, a local server). Put that service's own key in `CLIPPER_API_KEY`, and set `CLIPPER_BASE_URL` to its address and `CLIPPER_MODEL` to its model. For Alibaba (Singapore) that's `CLIPPER_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1` and `CLIPPER_MODEL=qwen-plus`; Alibaba keys belong to a region, and a Beijing key needs `https://dashscope.aliyuncs.com/compatible-mode/v1`.
+
+A Claude key is only ever sent to Anthropic. If `.env` still holds an address or model from another service and your key starts with `sk-ant-`, CLIPPER ignores those two lines, tells you so (in `clipper doctor` and at the start of a run), and uses Claude; you can delete the old lines. `CLIPPER_PROVIDER=anthropic` is only for pointing Claude at a gateway of your own.
 
 ### Add your YouTube cookies
 
@@ -79,20 +85,36 @@ clipper run "https://www.youtube.com/watch?v=..." --top 3 --export --open
 
 That finds highlights, renders the best three, writes their captions and hashtags, copies the clips into a folder on your Desktop, and opens it. The clips are also kept under `out/sessions/<date-time>/clips/`.
 
+### Or use the app (no typing)
+
+Once it's set up you don't need the Terminal. In Finder, open the CLIPPER folder and double-click **`CLIPPER.command`**. A window opens (leave it open) and your browser shows the app:
+
+1. Paste a YouTube link.
+2. Pick a style (drama and fights, funny and wild, or podcasts), how many clips you want, or tick "Let me choose the moments myself" to see everything it found first.
+3. Watch the progress. When it's done, each clip has a player, its captions and hashtags with Copy buttons, and (green) the hashtags that came from what's trending right now.
+4. "Copy to Desktop folder" makes the folder you AirDrop from.
+
+The first time, `CLIPPER.command` sets itself up (a few minutes, needs internet), and it repairs itself if you move the folder. If macOS says the file "can't be opened because Apple cannot check it", right-click it, choose Open, and confirm once. To stop CLIPPER, close that window. The **Setup** page checks that everything is ready and shows how each trend source is doing.
+
+For a shortcut on the Desktop, right-click `CLIPPER.command`, choose **Make Alias**, and drag the alias there. A shortcut made with `ln -s` works too. A plain *copy* of the file can only find the app if the folder is `~/CLIPPER` (or `Documents`, `Desktop` or `Downloads`, or named in `CLIPPER_HOME`); otherwise it says so and stops.
+
+Under the hood the app runs the same `clipper` commands, so it and the Terminal never disagree. It runs only on your computer (it listens on `127.0.0.1`, never the network), lets in only the browser tab the launcher opened, and needs nothing beyond what CLIPPER already uses. From a Terminal, `clipper gui` starts it too.
+
 ## Commands
 
 | Command | What it does |
 |---|---|
+| `clipper gui` | Opens the point-and-click app in your browser (same as double-clicking `CLIPPER.command`). |
 | `clipper doctor` | Checks your setup. Add `--check-ai` to test the AI key. |
 | `clipper find URL` | Picks highlights and saves them as a session. |
 | `clipper process SESSION` | Renders clips from a saved session. |
 | `clipper run URL` | `find` and `process` in one go. |
 | `clipper social SESSION` | Writes (or rewrites) titles, captions and hashtags. |
-| `clipper export SESSION` | Copies finished clips into one folder. |
+| `clipper export SESSION` | Copies finished clips into one folder, each with a matching `.txt` of its captions and hashtags. |
 | `clipper check SESSION` | Checks that most of the picks are drama scenes (6 of 8 by default). Add `--rejudge` to score picks you already have. Exit status 1 if it fails. |
 | `clipper review SESSION` | Writes a spreadsheet so you can rate the picks. |
 | `clipper eval review.csv` | Compares your ratings with the AI's scores. |
-| `clipper trends` | Shows or refreshes the trend list that captions use. `--diagnose` tests web search step by step. |
+| `clipper trends` | Shows the trends captions use. `--live` reads the live sources now and says how each went; `--init-sites` lets you add trend websites; `--diagnose` tests the AI web search. |
 
 Options you'll probably want:
 
@@ -136,20 +158,37 @@ A video longer than about 37 minutes isn't sent to the model in one piece. CLIPP
 
 ## Captions, hashtags and trends
 
-Each clip gets a cover title, three caption options, 3 to 5 hashtags, a few search keywords, and a pinned comment. The three captions take different angles, a tease, a question and a hot take, so you can try them against each other. Each one is under 150 characters with the hook at the start and no spoilers. It all lands in `<session>/social/`, and `clipper export` puts the captions in a `captions.txt` you can copy from.
+Each clip gets a cover title, three caption options, 3 to 5 hashtags, a few search keywords, and a pinned comment. The three captions take different angles, a tease, a question and a hot take, so you can try them against each other. Each one is under 150 characters with the hook at the start and no spoilers. It all lands in `<session>/social/`, and `clipper export` gives every clip a matching `.txt` (same name as the video) with its captions and hashtags, plus a `captions.txt` holding all of them.
 
 The thinking behind them comes from secondary sources, not TikTok itself (TikTok's own explanation wasn't reachable when this was built). Videos seem to spread when people watch to the end, replay, share and comment, and the first seconds matter a lot. Nobody outside TikTok knows the real weights, so there are no numbers in the prompt. A caption can't rescue a weak clip. It can set up the first seconds, add words people search for, and invite a reply. The length limits are this project's choices, not TikTok rules.
 
-### Trends (experimental, off by default)
+### Trends: what's hot right now, read on its own
 
-Captions can use what's trending, but TikTok has no official feed for that. CLIPPER can try web research instead: it asks a search-enabled Qwen model what's trending on TikTok for your niche and region, keeps only findings that match a page the search really returned, and caches the answer for 3 days.
+Hashtags work best when they match what people are looking at *today*, so CLIPPER reads that itself, with nothing for you to do. Every few hours (and at the start of a run, if its copy is out of date) it checks a set of public sources, cross-checks them, and hands the caption writer what is hot and tied to your video:
 
-**It doesn't work well yet, so it's off by default.** On the one account it was tried on, Alibaba's search returned seven pages, nearly all in Chinese and all about TikTok in general (news, and how-to guides for finding trends). The model correctly said none of them listed current hashtags for an English-language niche. The limit is what that search engine finds, not the code. Alibaba also refused its multi-round "agent" search form ("Non-streaming mode does not support Web Search in thinking mode"), and CLIPPER doesn't stream, so it uses the standard search.
+| Source | What it tells us |
+|---|---|
+| Google Trends, Wikipedia's most-read pages, Bluesky and Mastodon trending, entertainment and gaming news | what's hot for everyone |
+| Google News and Bing News, Google and Bing search suggestions, YouTube's newest videos on the topic | what's being said and searched about *your niche and this video* |
+| The video's own tags and hashtags | what the show or streamer already calls it |
+| Websites you add (`clipper trends --init-sites`) | any trend or virality site you use |
 
-- To see what the search returns on your account, run `clipper trends --diagnose`. It tests each search request form and shows whether it was accepted, which pages came back, and what the model says about them.
-- To turn it on, set `CLIPPER_AUTO_TRENDS=1` in `.env`, or force one try with `--refresh-trends`. After a failed attempt it waits 24 hours before trying again on its own.
-- To use your own list instead, run `clipper trends --init` and fill in `trends.txt`. A list you write always wins.
-- Without trends, captions are written from the clip itself plus general best practice. That works fine.
+Something that shows up in several independent sources ranks above something one source says, and something hot that is also about your topic ranks highest. The caption writer is told to use a trend only when it fits the clip, and to skip tags like #fyp.
+
+**What this is not: it doesn't read TikTok.** TikTok publishes no trends feed. Its Creative Center shows an anonymous visitor only a few hashtags and has no public API, and reading the For You page automatically needs a logged-in session, which TikTok's terms forbid and which can get the account limited. CLIPPER never touches TikTok or your account. Hashtags also don't make a video spread by themselves: viewers watching to the end matters far more, and TikTok's own advice is that tags like #fyp don't help.
+
+**Honest status: not yet checked against the live sites.** These sources couldn't be reached from where this was built, so they were tested against realistic samples, not the real feeds. Run `clipper trends --live` (or press "Check the trend sources" on the app's Setup page) to see in plain words how each source went on your computer. A source that fails is skipped, and nothing here can stop a run.
+
+- **Add sites you trust:** `clipper trends --init-sites` makes `trend_sites.txt`. One address per line, with `{query}` replaced by your video's topic. Each page is read politely: CLIPPER says who it is, sends no login, obeys the site's robots.txt, and reads it at most every few hours. A page that needs a login, or fills itself in with JavaScript, gives nothing, and the check says so. A site can add hashtags and supporting text, but it can't put an invented trend at the top by itself.
+- **Choose sources:** `CLIPPER_TREND_SOURCES=default,reddit` (Reddit is opt-in because it restricts automated access). `CLIPPER_LIVE_TRENDS=0` turns all of this off, and `--no-auto-trends` skips it for one run.
+- **Your own list always wins:** run `clipper trends --init` and fill in `trends.txt`.
+- **Country:** `CLIPPER_REGION` ("United States", "UK", ...) picks the country for Google Trends and news.
+
+#### The older AI web research (experimental, off)
+
+CLIPPER can also ask a search-enabled Qwen model what's trending on TikTok, keeping only findings that match a page the search really returned. On the one account it was tried on, Alibaba's search returned pages that were nearly all in Chinese and about TikTok in general, so it is off. `clipper trends --diagnose` shows what the search returns on your account; `CLIPPER_AUTO_TRENDS=1` turns it on, and `--refresh-trends` falls back to it when the live sources give nothing. It needs an OpenAI-compatible service with a web-search switch, so it does nothing when you use Claude; the live sources work with either.
+
+- Without any trends, captions are written from the clip itself plus general best practice. That works fine.
 
 ## Getting clips onto your phone
 
@@ -157,7 +196,7 @@ Captions can use what's trending, but TikTok has no official feed for that. CLIP
 clipper export out/sessions/<session> --open
 ```
 
-This copies the finished clips into one folder (by default `~/Desktop/clipper-exports/<session>`), named like `01 - short-title.mp4`. A `captions.txt` with ready-to-paste captions and the review spreadsheet go in with them. On a Mac, select the clips in Finder and use Share > AirDrop. AirDrop can't be driven from a command line, so CLIPPER stops at the folder. `--to DIR` exports anywhere, for example a folder that syncs to your phone.
+This copies the finished clips into one folder (by default `~/Desktop/clipper-exports/<session>`), named like `01 - short-title.mp4`. Next to each one is a `01 - short-title.txt` with that clip's title, the hook text shown at its start, its captions, hashtags and pinned comment, and where in the source video it came from, so you can always tell which hashtags belong to which clip. A `captions.txt` holding all of them and the review spreadsheet go in too. On a Mac, select the clips in Finder and use Share > AirDrop. AirDrop can't be driven from a command line, so CLIPPER stops at the folder. `--to DIR` exports anywhere, for example a folder that syncs to your phone.
 
 ## Rating the picks
 
@@ -177,13 +216,17 @@ The report shows how closely the AI's ranking matches yours, how often its top p
 
 Checked by hand, on an Intel MacBook Air: setup, `doctor`, and one real episode taken from a YouTube link to a finished vertical clip, using `qwen-flash`.
 
-Covered by automated tests only, so not yet run on real videos with a live model: long-video windows and re-scoring, the `viral` prompt, titles and captions, export, the review sheet, and `eval`. The tests run against a small fake AI server and synthetic video, so they check the logic, not how good the AI's choices are. That's what `clipper eval` is for.
+Claude is covered by automated tests, and has not been tried on a live Anthropic account yet. The tests use the real `anthropic` library against a local stand-in server that answers with Anthropic's streaming format and error formats, and they check what is sent (no temperature, room to think, the key in one place), how replies and refusals are read, and what each error says. They can't show that Anthropic accepts every request, so the first real run is the real check: `clipper doctor --check-ai` makes one tiny call.
+
+Covered by automated tests only, so not yet run on real videos with a live model: long-video windows and re-scoring, the `viral` prompt, titles and captions, live trends, export, the review sheet, `eval`, and the app. The tests run against a small fake AI server and synthetic video, so they check the logic, not how good the AI's choices are. That's what `clipper eval` is for.
 
 Known gaps:
 
 - Videos need YouTube captions. There's no speech-to-text fallback yet.
+- The app has been tried in a headless Chrome-style browser against a stand-in for the pipeline, not yet on a Mac in Safari with real videos. Clip playback uses the browser's own player, which I couldn't test here.
+- The app takes a YouTube link, not a file from your computer or a Twitch link, for the same captions reason.
 - Clip length is fixed at roughly one to two minutes.
-- Automatic trend research doesn't return usable results yet (see [Trends](#trends-experimental-off-by-default)).
+- The live trend sources haven't been checked against the real sites yet, only against samples (see [Trends](#trends-whats-hot-right-now-read-on-its-own)); `clipper trends --live` shows how each one goes on your computer. The older AI web research doesn't return usable results.
 - Posting is manual. TikTok's API only allows private posts until an app is audited.
 - Only clip footage you have permission to use. YouTube's terms and copyright law apply to what you download and post.
 
@@ -205,7 +248,19 @@ Run `clipper doctor` first. Most problems show up there.
 
 **`CERTIFICATE_VERIFY_FAILED`**: some Python installs on macOS ship without a list of trusted certificates. CLIPPER switches to the one from `certifi` automatically. If it still fails, something on your network (a work or school network, a VPN, or security software) may be intercepting HTTPS connections.
 
-**`AllocationQuota.FreeTierOnly` or "free quota has been exhausted"**: that's Alibaba refusing the request, not CLIPPER. It happens when a model's free allowance is used up and the "free quota only" switch is on, which stops Alibaba from billing you. Either turn the switch off for that model in the Alibaba console (their [docs](https://help.aliyun.com/en/model-studio/new-free-quota) say it can take about 30 minutes, and an account that isn't identity-verified has to verify and top up first), or use a model that still has free quota. Check prices before you switch to paying.
+**A clip takes many minutes to make**: after every clip CLIPPER prints a `Timing:` line (`cut`, `layout`, `hook`, `captions`) so you can see which step is slow. The work is video encoding, and the biggest single factor is whether your computer's own video encoder is used. `clipper doctor` has a `video encoder:` line that says which one will be: on a Mac it should say `h264_videotoolbox`, which every Mac has (Intel ones included); `libx264 on the CPU` means none worked, and the reason is on that line. The other two levers are `CLIPPER_MAX_FPS` and `CLIPPER_MAX_HEIGHT` (see the table above).
+
+Measured, and what wasn't: 30 seconds of 60 fps 1080p test footage took 118 s for the four steps before this was changed and 33 s after, on a 4-core Linux machine using only the CPU encoder, and the old and new pictures compared at SSIM 0.996 / PSNR 43.5 dB (differences that small can't be seen). The old `download` step turned out to be re-encoding the whole section with ffmpeg's default (slow) settings: that is yt-dlp's documented behaviour when it is told to cut exactly, and it took 5 minutes for a 78-second section on a MacBook Air. The Mac hardware encoder was not measured, because it only exists on a Mac, so that part is expected to help rather than known to.
+
+**"Anthropic rejected the API key (401)"**: `CLIPPER_API_KEY` in `.env` isn't a valid Claude key. It should start with `sk-ant-`, be on one line with nothing else, and come from the [Console](https://platform.claude.com/settings/keys). A key that was deleted or copied with a missing piece fails the same way. `clipper doctor --check-ai` shows the result of one call.
+
+**"Your Anthropic account is out of credit"**: API use has its own balance, separate from a Claude.ai subscription. Add credit in the Console's [Billing page](https://platform.claude.com/settings/billing).
+
+**"Anthropic does not know the model"**: the `CLIPPER_MODEL` line in `.env` names a model that doesn't exist or that your account can't use. Delete the line to get `claude-opus-5-5`, or use `claude-sonnet-5-5` or `claude-haiku-5-5`.
+
+**"Claude ran out of room before it finished its reply"**: Claude spends part of its allowance thinking, and on a very long window it ran out. Run it again, add `CLIPPER_EFFORT=low` to `.env`, or use a shorter video.
+
+**`AllocationQuota.FreeTierOnly` or "free quota has been exhausted"** (only if you use Alibaba): that's Alibaba refusing the request, not CLIPPER. It happens when a model's free allowance is used up and the "free quota only" switch is on, which stops Alibaba from billing you. Either turn the switch off for that model in the Alibaba console (their [docs](https://help.aliyun.com/en/model-studio/new-free-quota) say it can take about 30 minutes, and an account that isn't identity-verified has to verify and top up first), or use a model that still has free quota. Check prices before you switch to paying.
 
 **Trends come back empty** (only if you turned them on): run `clipper trends --diagnose`. It sends each web-search request form on its own, shows whether Alibaba accepted or refused it (with the reason), lists the pages the search found, and prints what the model says when it isn't boxed into a strict format. If the pages are off-topic or in another language, the search engine just isn't finding what you need. Captions work without trends, so leaving them off is a fine answer.
 
@@ -215,7 +270,7 @@ This repo is public, so it's set up so that nothing private can end up in it.
 
 - **Your key and cookies stay on your computer.** `.env` and cookie files are git-ignored, including the usual names (`cookies.txt`, `www.youtube.com_cookies.txt`, JSON exports) and private keys. `tests/test_repo_hygiene.py` fails if that stops being true, or if any file that isn't git-ignored contains something shaped like an API key, a private key or a cookie line.
 - **Treat the cookies file like a password.** Whoever has it can use your YouTube login. Don't commit it, email it or paste it into a chat. If you've shared it anywhere, signing out of YouTube everywhere (or changing your Google password) makes it useless.
-- **Where your data goes.** `yt-dlp` talks to YouTube, using your cookies. The transcript of each video goes to the AI service you set in `.env` (Alibaba by default). If MediaPipe is installed, its face model is downloaded once from Google. CLIPPER itself sends nothing else anywhere and has no telemetry.
+- **Where your data goes.** `yt-dlp` talks to YouTube, using your cookies. The transcript of each video goes to the AI service you set in `.env` (Anthropic's Claude by default). If MediaPipe is installed, its face model is downloaded once from Google. CLIPPER itself sends nothing else anywhere and has no telemetry.
 - **Dependencies are checked.** `pyproject.toml` only allows versions of its dependencies that had no known security advisory when they were last checked (the date is in the file), and `requirements.txt` pins the exact versions the tests pass on. To check your own install, run `pip install pip-audit` and then `pip-audit`. `setup.sh` installs prebuilt packages only, so no third-party package gets compiled or runs its own build script on your machine.
 
 ## Credits and license

@@ -133,6 +133,16 @@ def describe(trends: Trends | None, path: str | Path | None = None) -> str:
             "`clipper trends --refresh` tries the experimental web research."
         )
     age = "today" if trends.age_days < 1 else f"{trends.age_days:.0f} day(s) ago"
+    if trends.source == "feeds":
+        hours = trends.age_days * 24
+        read = "just now" if hours < 1 else f"{hours:.0f} hour(s) ago" if hours < 48 else age
+        line = (
+            f"Using live trends from public feeds, not TikTok's own data ({trends.note}; read {read}; "
+            f"{len(trends.hashtags)} possible tag(s))"
+        )
+        if trends.stale:
+            line += f". STALE: older than {STALE_AFTER_DAYS} days"
+        return line
     if trends.source == "web":
         check = (
             "every item matched a source the search returned"

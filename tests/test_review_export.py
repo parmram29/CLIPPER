@@ -235,3 +235,78 @@ def test_export_lists_every_caption_angle_with_the_hashtags_ready_to_paste(sessi
     assert "Alt (hot take): He was right and you know it #drama #dramaalert" in block
     assert "Pinned comment: Team who?" in block
     assert "Search keywords: reality tv fight, awkward dinner" in block
+
+
+# --- a matching text file beside every exported clip ---------------------------------------------
+
+
+def test_each_exported_clip_gets_a_matching_text_file_with_its_own_hashtags(session_dir, tmp_path):
+    _rich_social(session_dir)
+    result = export.export_clips(session_dir, tmp_path / "d")
+
+    assert [n.name for n in result.notes] == ["01 - captivated.txt", "03 - fight-night.txt"]
+    # same folder and same name as the video, so the pair is obvious in Finder
+    for clip, note in zip(result.clips, result.notes):
+        assert note.parent == clip.parent and note.stem == clip.stem and note.is_file()
+
+    first, third = (n.read_text(encoding="utf-8") for n in result.notes)
+    assert first.startswith("01 - captivated.mp4\n")
+    assert "Hashtags: #drama #wtf" in first
+    assert "Hashtags: #drama #dramaalert" in third
+    # nothing leaks between clips: each file only has its own clip's tags and words
+    assert "dramaalert" not in first and "Fight night" not in first
+    assert "#wtf" not in third and "Captivated" not in third
+
+
+def test_a_clips_text_file_is_exactly_its_entry_in_captions_txt(session_dir, tmp_path):
+    _rich_social(session_dir)
+    result = export.export_clips(session_dir, tmp_path / "d")
+    captions = result.captions.read_text(encoding="utf-8")
+    expected = "\n\n".join(n.read_text(encoding="utf-8").rstrip("\n") for n in result.notes) + "\n"
+    assert captions == expected
+
+
+def test_a_clip_without_post_copy_still_gets_a_text_file_that_says_how_to_make_one(session_dir, tmp_path):
+    result = export.export_clips(session_dir, tmp_path / "d")  # clip 3 has no post copy in the base fixture
+    third = result.notes[1].read_text(encoding="utf-8")
+    assert "Hashtags:" not in third  # there are none to show, and it must not pretend
+    assert f"clipper social {session_dir}" in third
+    assert "Caption: d" in third  # the pick's own description stands in
+
+
+def test_the_text_file_says_where_in_the_source_video_the_clip_came_from(session_dir, tmp_path):
+    import json
+
+    data_file = session_dir / "session_data.json"
+    data = json.loads(data_file.read_text(encoding="utf-8"))
+    data["video_info"] = {"channel": "Some Streamer"}
+    data_file.write_text(json.dumps(data), encoding="utf-8")
+
+    result = export.export_clips(session_dir, tmp_path / "d")
+    first, third = (n.read_text(encoding="utf-8") for n in result.notes)
+    assert "Source:  https://youtu.be/x at 00:26:56 - 00:27:58 (channel: Some Streamer)" in first
+    assert "Source:  https://youtu.be/x at 01:02:00 - 01:03:10 (channel: Some Streamer)" in third
+
+
+def test_the_source_line_is_left_out_when_nothing_about_it_is_known():
+    assert export._source_line({}, {}) == ""
+    assert export._source_line({"url": "https://youtu.be/x"}, {}) == "Source:  https://youtu.be/x"
+
+
+def test_exporting_twice_keeps_one_text_file_per_clip(session_dir, tmp_path):
+    export.export_clips(session_dir, tmp_path / "d")
+    export.export_clips(session_dir, tmp_path / "d")
+    assert sorted(p.name for p in (tmp_path / "d").glob("*.txt")) == [
+        "01 - captivated.txt",
+        "03 - cafe-fight.txt",
+        "captions.txt",
+    ]
+
+
+def test_the_how_to_hint_quotes_a_session_path_that_has_spaces(session_dir, tmp_path):
+    import shutil
+
+    moved = tmp_path / "my sessions" / "s 1"
+    shutil.copytree(session_dir, moved)
+    note = export.export_clips(moved, tmp_path / "d").notes[1].read_text(encoding="utf-8")
+    assert f"clipper social '{moved}'" in note  # pasted into a terminal as-is, it must still work

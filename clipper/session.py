@@ -122,6 +122,9 @@ def find_highlights_only(
         rerank=ai.get("rerank", True),
         # None keeps the plain behaviour; a number turns on the drama check (see drama.py)
         drama_share=ai.get("drama_share"),
+        # CLIPPER: which service the key belongs to, and (Claude only) how hard it thinks
+        provider=ai.get("provider"),
+        effort=ai.get("effort"),
     )
 
     if not highlights:

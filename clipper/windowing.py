@@ -443,6 +443,8 @@ def find_highlights_windowed(
     overlap_seconds: float = DEFAULT_OVERLAP_SECONDS,
     rerank: bool = True,
     drama_share: float | None = None,
+    provider: str | None = None,
+    effort: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Drop-in for ``highlight_finder.find_highlights`` that handles long videos.
 
@@ -464,6 +466,8 @@ def find_highlights_windowed(
         output_language=output_language,
         log=log,
         fit_length=length_fitter(transcript),  # built from the whole video, not one window
+        provider=provider,  # None: judged from the key and address (a Claude key goes to Claude)
+        effort=effort,  # Claude only: how hard it thinks
     )
     if drama_on:
         common["keep_all"] = True  # rank every valid candidate instead of cutting at the model's own order
@@ -527,7 +531,7 @@ def find_highlights_windowed(
 
     pool = dedupe(pool)
     lines = parse_lines(transcript)
-    ai = {"api_key": api_key, "base_url": base_url, "model": model}
+    ai = {"api_key": api_key, "base_url": base_url, "model": model, "provider": provider, "effort": effort}
     if drama_on:
         pool, judge_usage = rerank_candidates(pool, lines, ai, log=log, with_drama=True)
         llm.add_usage(usage, judge_usage)

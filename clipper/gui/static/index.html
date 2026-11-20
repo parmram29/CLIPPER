@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>CLIPPER</title>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="#/"><img src="/static/icon.svg" alt="" width="28" height="28"><span>CLIPPER</span></a>
+    <nav aria-label="Main">
+      <a href="#/" data-nav="home">New clips</a>
+      <a href="#/sessions" data-nav="sessions">My clips</a>
+      <a href="#/setup" data-nav="setup">Setup <span id="setup-dot" class="dot" hidden></span></a>
+    </nav>
+  </header>
+  <div id="busy" class="busy" hidden></div>
+  <main id="view" tabindex="-1"></main>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <noscript><p class="wrap">CLIPPER needs JavaScript turned on in your browser.</p></noscript>
+  <script src="/static/app.js"></script>
+</body>
+</html>

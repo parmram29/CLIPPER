@@ -297,7 +297,11 @@ def resolve_drama_share(args: argparse.Namespace, env: Mapping[str, str] | None 
 
 
 def _find(args: argparse.Namespace) -> dict[str, Any]:
-    ai = config.load_ai_config().as_dict()
+    cfg = config.load_ai_config()
+    for note in cfg.notes:  # settings left over from another service, ignored: say so once per run
+        _log(f"Note: {note}")
+    _log(f"AI: {cfg.describe()}")
+    ai = cfg.as_dict()
     ai.update(prompt_and_window_settings(args))
     cookies = resolve_cookies(args.cookies)
 
@@ -350,7 +354,12 @@ def _process(
     niche_text = resolve_niche(niche)
     trends = (
         load_trends_for_run(
-            trends_file, niche=niche_text, region=region, auto=auto_trends, refresh=refresh_trends
+            trends_file,
+            niche=niche_text,
+            region=region,
+            auto=auto_trends,
+            refresh=refresh_trends,
+            video_info=session.get("video_info"),
         )
         if social
         else None
@@ -517,16 +526,39 @@ def auto_trends_enabled(env: Mapping[str, str] | None = None) -> bool:
     return (env.get("CLIPPER_AUTO_TRENDS") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def live_trends_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """Live public feeds (see trend_feeds.py) are ON unless ``CLIPPER_LIVE_TRENDS`` is 0, false, no or off.
+
+    They need no key and no login, are read at most every few hours, and a failure never stops a run.
+    """
+    env = os.environ if env is None else env
+    return (env.get("CLIPPER_LIVE_TRENDS") or "1").strip().lower() not in ("0", "false", "no", "off")
+
+
 def search_ai_config(env: Mapping[str, str] | None = None) -> dict[str, str] | None:
     """The AI settings for trend research: same key and endpoint, optionally a different model
     (``CLIPPER_SEARCH_MODEL``) in case the chat model does not support web search."""
     env = os.environ if env is None else env
     try:
-        ai = config.load_ai_config(env).as_dict()
+        cfg = config.load_ai_config(env)
     except config.ConfigError:
         return None
+    if cfg.is_claude:
+        return None  # the search switches are other providers' (see search_problem)
+    ai = cfg.as_dict()
     ai["model"] = (env.get("CLIPPER_SEARCH_MODEL") or "").strip() or ai["model"]
     return ai
+
+
+def search_problem(env: Mapping[str, str] | None = None) -> str:
+    """Why AI web research cannot run right now, in a sentence (for when ``search_ai_config`` is None)."""
+    from . import llm
+
+    try:
+        cfg = config.load_ai_config(env)
+    except config.ConfigError as exc:
+        return str(exc)
+    return llm.NO_CLAUDE_SEARCH if cfg.is_claude else "AI web research is not available with these settings."
 
 
 def search_api(env: Mapping[str, str] | None = None) -> str:
@@ -535,7 +567,7 @@ def search_api(env: Mapping[str, str] | None = None) -> str:
     ``CLIPPER_SEARCH_API`` can force either. Left unset, an Alibaba endpoint uses the native API,
     which returns the sources a search used (the OpenAI-compatible endpoint never does, per
     Alibaba's docs) and was confirmed to run searches on a real account; any other provider uses
-    the OpenAI-compatible route.
+    the OpenAI-compatible route. (Claude has no route: see ``search_problem``.)
     """
     from urllib.parse import urlparse
 
@@ -545,7 +577,7 @@ def search_api(env: Mapping[str, str] | None = None) -> str:
         raise config.ConfigError(f"CLIPPER_SEARCH_API must be 'auto', 'compat' or 'dashscope', not {value!r}")
     if value != "auto":
         return value
-    host = urlparse(env.get("CLIPPER_BASE_URL") or config.DEFAULT_BASE_URL).hostname or ""
+    host = urlparse(env.get("CLIPPER_BASE_URL") or "").hostname or ""
     return "dashscope" if host.endswith("aliyuncs.com") else "compat"
 
 
@@ -557,13 +589,14 @@ def load_trends_for_run(
     region: str | None = None,
     auto: bool = True,
     refresh: bool = False,
+    video_info: Mapping[str, Any] | None = None,
 ):
     """Work out which trends the captions should use, and say what was found.
 
     In order: a file you named (``--trends`` / ``$CLIPPER_TRENDS``), then ``./trends.txt`` if you
-    have filled it in, then automatic web research (cached, refreshed every few days). A path
-    you asked for that does not exist is an error; nothing found is just a note, and captions
-    are still written.
+    have filled it in, then the live public feeds (on by default; refreshed on their own every few
+    hours), then the experimental AI web research if you switched it on. A path you asked for that
+    does not exist is an error; nothing found is just a note, and captions are still written.
     """
     from . import trend_research
     from . import trends as trends_mod
@@ -581,8 +614,20 @@ def load_trends_for_run(
         _log(trends_mod.describe(loaded, explicit))
         return loaded
 
-    # Research runs if it is switched on, or if you asked for it right now with --refresh-trends;
-    # --no-auto-trends beats both.
+    # Live public feeds: on by default, cached for a few hours, and never able to stop a run.
+    # --no-auto-trends turns them off for this run.
+    if auto and live_trends_enabled(env):
+        from . import trend_feeds
+
+        found = trend_feeds.auto_feeds(
+            niche=niche, region=resolve_region(region, env), video_info=video_info, force=refresh, log=_log, env=env
+        )
+        if found:
+            _log(trends_mod.describe(found))
+            return found
+
+    # The experimental AI web research runs if it is switched on (CLIPPER_AUTO_TRENDS=1), or if you
+    # asked for a refresh right now and the live sources gave nothing; --no-auto-trends beats both.
     if auto and (refresh or auto_trends_enabled(env)):
         ai = search_ai_config(env)
         if ai:
@@ -596,7 +641,8 @@ def load_trends_for_run(
             )
             _log(trends_mod.describe(found))
             return found
-        _log(trends_mod.describe(None, explicit))  # wanted, but there is no key to do it with
+        _log(search_problem(env))  # wanted, but it cannot be done (no key, or Claude, which has no search route)
+        _log(trends_mod.describe(None, explicit))
         return None
     return None  # research is off and there is no list: nothing to report on every run
 
@@ -652,7 +698,8 @@ def _export(session_dir: str | Path, dest: str | None, open_after: bool) -> None
 
     result = export_mod.export_clips(session_dir, dest)
     print(f"\nExported {len(result.clips)} clip(s) to: {result.dest}")
-    print("   captions.txt has a ready-to-paste caption for each; review.csv is the review sheet.")
+    print("   Each clip has a matching .txt (same name) with its caption and hashtags; captions.txt has them all.")
+    print("   review.csv is the review sheet.")
     if sys.platform == "darwin":
         print("   To AirDrop: select the clips in Finder, then Share > AirDrop.")
     if open_after and not export_mod.reveal(result.dest):
@@ -728,6 +775,14 @@ def _cmd_trends(args: argparse.Namespace) -> int:
     from . import trends as trends_mod
 
     path = args.file or os.environ.get("CLIPPER_TRENDS") or trends_mod.DEFAULT_TRENDS_FILE
+    if args.init_sites:
+        from . import trend_sites
+
+        created = trend_sites.init_template()
+        print(f"Created {created}.")
+        print("Open it, add the trend or virality websites you use (one address per line), and save.")
+        print("Then `clipper trends --live` shows whether each one could be read.")
+        return 0
     if args.init:
         created = trends_mod.init_template(path)
         print(f"Created {created}.")
@@ -745,9 +800,20 @@ def _cmd_trends(args: argparse.Namespace) -> int:
     if args.diagnose:
         ai = search_ai_config()
         if ai is None:
-            raise config.ConfigError("No API key configured. Set CLIPPER_API_KEY in .env to test web search.")
+            raise config.ConfigError(search_problem())
         for line in trend_research.diagnose(ai, niche=niche, region=region, api=search_api()):
             print(line)
+        return 0
+
+    if args.live:
+        from . import trend_feeds
+
+        found = trend_feeds.auto_feeds(niche=niche, region=region, force=True, log=_log)
+        if found is None:
+            print("Nothing could be read. Check your internet connection and try again; the lines above say which source failed.")
+            return 1
+        print(trends_mod.describe(found))
+        print(found.text)
         return 0
 
     manual = trends_mod.load_trends(path)
@@ -763,7 +829,7 @@ def _cmd_trends(args: argparse.Namespace) -> int:
     if args.refresh:
         ai = search_ai_config()
         if ai is None:
-            raise config.ConfigError("No API key configured. Set CLIPPER_API_KEY in .env to research trends.")
+            raise config.ConfigError(search_problem())
         trend_research.auto_trends(ai, niche=niche, region=region, force=True, log=_log, api=search_api())
     report = trend_research.load_cache(cache_file)
     if report is None:
@@ -859,6 +925,11 @@ def _cmd_eval(args: argparse.Namespace) -> int:
     print(evaluation.format_report(evaluation.evaluate(rated, good=args.good, k=args.k)))
     return 0
 
+def _cmd_gui(args: argparse.Namespace) -> int:
+    from .gui import server
+
+    return server.serve(Path.cwd(), args.out, port=args.port, open_browser=not args.no_browser)
+
 
 def _ffmpeg_install_hint(platform: str | None = None) -> str:
     platform = sys.platform if platform is None else platform
@@ -936,6 +1007,16 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     except (OSError, subprocess.SubprocessError) as exc:
         fail(f"ffmpeg not runnable ({ffmpeg}): {exc}. {_ffmpeg_install_hint()}")
 
+    # CLIPPER: which encoder every render step will use (see encoding.py). On a laptop the hardware one is what makes
+    # a clip take a minute instead of many; tried with a test frame, so this says what will really happen.
+    from . import encoding
+
+    encoder = encoding.choose()
+    if encoder.hardware:
+        ok(f"video encoder: {encoder.name}, built into this computer ({encoder.reason})")
+    else:
+        warn(f"video encoder: libx264 on the CPU, which is slow on a laptop ({encoder.reason})")
+
     for module, purpose in (
         ("yt_dlp", "downloads"),
         ("cv2", "video frames"),
@@ -994,11 +1075,21 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     cfg = None
     try:
         cfg = config.load_ai_config()
-        ok(f"AI: model {cfg.model} @ {cfg.base_url} (key {cfg.masked_key})")
+        ok(f"AI: {cfg.describe()}")
+        for note in cfg.notes:
+            warn(note)
     except config.ConfigError as exc:
         warn(str(exc))
 
-    if args.check_ai and cfg:
+    if args.check_ai and cfg and cfg.is_claude:
+        try:
+            from . import claude_client
+
+            text, usage = claude_client.from_ai(cfg.as_dict(), "Reply with the single word: ok", max_tokens=5)
+            ok(f"Claude answered: {text!r} ({usage['prompt_tokens']} tokens in, {usage['completion_tokens']} out)")
+        except Exception as exc:  # noqa: BLE001
+            fail(f"AI endpoint call failed: {str(exc)[:500]}")
+    elif args.check_ai and cfg:
         try:
             from openai import OpenAI
 
@@ -1074,8 +1165,7 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument(
             "--refresh-trends",
             action="store_true",
-            help="research trends now (even though automatic research is off by default), "
-            "instead of using the cached result",
+            help="read the live trend feeds now, instead of using the result saved in the last few hours",
         )
 
     def add_find_args(sp: argparse.ArgumentParser) -> None:
@@ -1198,6 +1288,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="test each web-search request form on its own and show exactly what came back "
         "(a few small AI calls; writes nothing)",
     )
+    trends.add_argument(
+        "--init-sites",
+        action="store_true",
+        help="create trend_sites.txt, where you list trend or virality websites for CLIPPER to read as well",
+    )
+    trends.add_argument(
+        "--live",
+        action="store_true",
+        help="read the live public feeds now (Google Trends, Wikipedia, search suggestions), say how each "
+        "one went, and save the result. This is what runs on its own every few hours",
+    )
     trends.add_argument("--niche", help="what your account is about (default: $CLIPPER_NICHE)")
     trends.add_argument("--region", help="where your audience is (default: $CLIPPER_REGION)")
     trends.add_argument("--file", metavar="FILE", help="your own file (default: $CLIPPER_TRENDS, then ./trends.txt)")
@@ -1235,13 +1336,23 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--k", type=int, default=3, help="check the model's top K picks (default 3)")
     evaluate.set_defaults(func=_cmd_eval)
 
+    gui = sub.add_parser(
+        "gui",
+        help="open the point-and-click app in your browser (the same commands, no typing)",
+    )
+    gui.add_argument("--port", type=int, default=8765, help="where to listen on this computer (default 8765)")
+    gui.add_argument("--no-browser", action="store_true", help="do not open the browser; print the address instead")
+    gui.add_argument("--out", default=DEFAULT_OUT, help=f"where sessions are kept (default ./{DEFAULT_OUT})")
+    gui.set_defaults(func=_cmd_gui)
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     global _CA_FALLBACK
     args = build_parser().parse_args(argv)
-    config.load_dotenv_if_present()
+    if args.command != "gui":  # the app re-reads .env for every job instead, so edits to it take effect
+        config.load_dotenv_if_present()
     _CA_FALLBACK = ensure_ca_certificates()
     try:
         return args.func(args)

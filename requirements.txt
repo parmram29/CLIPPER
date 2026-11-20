@@ -4,7 +4,7 @@
 #   * setup.sh does NOT use this file. It installs from pyproject.toml, which allows newer versions.
 #   * Resolved on Python 3.13 (numpy 2.5 needs Python 3.12 or newer). The optional extras are left
 #     out: `clipper[face]` (mediapipe) and `clipper[dev]` (pytest).
-#   * Checked with pip-audit against PyPI's advisory database on 2026-11-05: none of these exact
+#   * Checked with pip-audit against PyPI's advisory database on 2026-11-20: none of these exact
 #     versions has a known vulnerability. The test suite passes on exactly this set (the
 #     face-tracking tests need the optional mediapipe extra and are skipped without it).
 #   * opencv-contrib-python 5.x publishes Intel-Mac wheels only for macOS 14 and newer. On an older
@@ -14,8 +14,10 @@
 # To regenerate: install the project into a fresh virtualenv, run `pip freeze`, drop the `clipper`
 # line and keep this header. tests/test_repo_hygiene.py checks the pins against pyproject.toml.
 annotated-types==0.8.0
+anthropic==2.11.0
 anyio==4.16.0
 certifi==2026.10.23
+docstring_parser==0.18.0
 h11==0.16.0
 httpcore2==2.16.0
 httpx2==2.16.0
@@ -24,6 +26,7 @@ jiter==0.18.0
 numpy==2.5.4
 openai==3.46.0
 opencv-contrib-python==5.0.0.93
+opentelemetry-api==1.45.2
 pillow==13.0.0
 pydantic==2.14.2
 pydantic_core==2.50.2

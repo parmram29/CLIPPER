@@ -162,7 +162,9 @@ def test_process_can_export_straight_to_a_folder(tmp_path, cookies_file, fake_re
     assert code == 0
     assert (dest / "01 - first.mp4").read_bytes() == b"video"
     assert (dest / "captions.txt").is_file() and (dest / "review.csv").is_file()
+    assert (dest / "01 - first.txt").is_file()  # the clip's own text file sits beside it
     assert f"Exported 1 clip(s) to: {dest}" in out
+    assert "matching .txt" in out
 
 
 def test_open_alone_implies_an_export_and_opens_the_folder(tmp_path, cookies_file, fake_renderer, monkeypatch):

@@ -189,6 +189,8 @@ def download_subtitle_only(
                     "title": info.get("title", ""),
                     "description": (info.get("description", "") or "")[:2000],
                     "channel": info.get("channel", ""),
+                    # CLIPPER: the video's own tags feed the hashtag suggestions (see trend_feeds.py)
+                    "tags": [str(t)[:60] for t in (info.get("tags") or [])[:30] if isinstance(t, str)],
                 }
     except Exception as e:
         last_error = str(e)

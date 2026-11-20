@@ -3,10 +3,12 @@
 import json
 import math
 import shutil
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from . import encoding
 from .video_processor import download_video_section
 from .portrait import convert_to_portrait, convert_to_portrait_centered
 from .hook_generator import generate_hook
@@ -89,6 +91,12 @@ def _resolve_padding(ai: dict[str, Any]) -> tuple[float, float]:
     )
 
 
+def _took(seconds: float) -> str:
+    """``41s`` or ``2m05s``, for the timing line."""
+    whole = int(round(seconds))
+    return f"{whole}s" if whole < 60 else f"{whole // 60}m{whole % 60:02d}s"
+
+
 def _run_portrait(input_path: str, output_path: str, options: dict[str, Any], log: LogFn) -> str:
     """Run portrait conversion — face-tracked, centered, or skipped entirely."""
     reframe_mode = options.get("reframeMode", "face")
@@ -133,6 +141,9 @@ def process_selected_highlights(
     add_credit_watermark = options.get("addCreditWatermark", False)
 
     keep_original = options.get("reframeMode") == REFRAME_ORIGINAL
+    # CLIPPER: the tallest source to download. The centered layout shows the video 1080 wide, so 720 lines are enough and
+    # everything after the download (decode, blur, three encodes) has 2.25x fewer pixels to work on.
+    source_height = encoding.max_height(centered=options.get("reframeMode", "face") == "centered")
 
     lead_in, tail_out = _resolve_padding(ai)
     log(f"Clip padding: {lead_in:.1f}s before / {tail_out:.1f}s after each range")
@@ -178,21 +189,30 @@ def process_selected_highlights(
         start_stamp = format_timestamp(clip_start)
         end_stamp = format_timestamp(clip_end)
 
+        # CLIPPER: how long each step takes, shown after the clip, so a slow computer shows where the time goes.
+        spent: dict[str, float] = {}
+        clip_clock = time.monotonic()
+
         # Step 1: Download video section. An end past the source duration is
         # fine — yt-dlp clamps the range to what the video actually has.
         log(f"[{i}/{total}] Downloading video section {start_stamp} -> {end_stamp}...")
+        step_clock = time.monotonic()
         video_path = download_video_section(
             url=url,
             start_time=start_stamp,
             end_time=end_stamp,
             output_path=section_path,
             log=log,
+            max_height=source_height,
         )
+        spent["cut"] = time.monotonic() - step_clock
         log(f"[{i}/{total}] Section downloaded: {video_path}")
 
         # Step 2: Portrait conversion
         portrait_path = str(temp_dir / f"portrait_{i:03d}.mp4")
+        step_clock = time.monotonic()
         video_path = _run_portrait(video_path, portrait_path, options, log)
+        spent["layout"] = time.monotonic() - step_clock
         if keep_original:
             log(f"[{i}/{total}] Portrait conversion skipped (keeping 16:9)")
         else:
@@ -206,6 +226,7 @@ def process_selected_highlights(
                 hook_duration = hook_style.get("duration_seconds", 5.0)
 
                 hook_output_path = str(temp_dir / f"hooked_{i:03d}.mp4")
+                step_clock = time.monotonic()
                 video_path = generate_hook(
                     input_video_path=video_path,
                     hook_text=hook_text,
@@ -214,6 +235,7 @@ def process_selected_highlights(
                     hook_style=hook_style,
                     log=log,
                 )
+                spent["hook"] = time.monotonic() - step_clock
                 log(f"[{i}/{total}] Hook generation complete")
             else:
                 log(f"[{i}/{total}] No hook text, skipping hook generation")
@@ -227,12 +249,14 @@ def process_selected_highlights(
 
             if clip_words:
                 caption_output_path = str(temp_dir / f"captioned_{i:03d}.mp4")
+                step_clock = time.monotonic()
                 video_path = generate_captions_from_words(
                     input_video_path=video_path,
                     output_path=caption_output_path,
                     words=clip_words,
                     log=log,
                 )
+                spent["captions"] = time.monotonic() - step_clock
                 clip_had_captions = True
                 log(f"[{i}/{total}] Caption generation complete ({len(clip_words)} words)")
             else:
@@ -248,6 +272,7 @@ def process_selected_highlights(
             credit_config = ai.get("credit_watermark") if add_credit_watermark else None
 
             watermark_output_path = str(temp_dir / f"watermarked_{i:03d}.mp4")
+            step_clock = time.monotonic()
             video_path = apply_watermark(
                 input_video_path=video_path,
                 output_path=watermark_output_path,
@@ -255,6 +280,7 @@ def process_selected_highlights(
                 credit_watermark=credit_config,
                 log=log,
             )
+            spent["watermark"] = time.monotonic() - step_clock
             log(f"[{i}/{total}] Watermark overlay complete")
         else:
             log(f"[{i}/{total}] Watermark overlay skipped (disabled)")
@@ -289,6 +315,11 @@ def process_selected_highlights(
             json.dump(data, f, indent=2, ensure_ascii=False)
 
         log(f"[{i}/{total}] Clip saved: {output_file}")
+        log(
+            f"[{i}/{total}] Timing: "
+            + ", ".join(f"{name} {_took(seconds)}" for name, seconds in spent.items())
+            + f" ({_took(time.monotonic() - clip_clock)} in all)"
+        )
         results.append({
             "clip_index": highlight_index,
             "output_path": str(output_file),
