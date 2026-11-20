@@ -87,7 +87,7 @@ def test_git_records_the_launcher_as_executable_so_a_fresh_checkout_can_be_doubl
 
 def test_the_launcher_starts_the_app_from_its_own_folder_and_repairs_a_moved_environment():
     text = LAUNCHER.read_text(encoding="utf-8")
-    assert 'cd "$(dirname "$0")"' in text  # works wherever the folder was moved to
+    assert 'dirname "$SOURCE"' in text and 'cd "$HERE"' in text  # works wherever the folder was moved to (tests/test_launcher.py runs it)
     assert '"$PY" -m clipper gui' in text  # not the .venv/bin/clipper launcher, whose path breaks when a folder is moved
     assert "clipper.gui.server" in text and "bash setup.sh" in text
     for risky in ("sudo", "rm -rf", "curl", "wget", "| sh", "| bash", "eval "):

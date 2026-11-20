@@ -96,6 +96,8 @@ Once it's set up you don't need the Terminal. In Finder, open the CLIPPER folder
 
 The first time, `CLIPPER.command` sets itself up (a few minutes, needs internet), and it repairs itself if you move the folder. If macOS says the file "can't be opened because Apple cannot check it", right-click it, choose Open, and confirm once. To stop CLIPPER, close that window. The **Setup** page checks that everything is ready and shows how each trend source is doing.
 
+For a shortcut on the Desktop, right-click `CLIPPER.command`, choose **Make Alias**, and drag the alias there. A shortcut made with `ln -s` works too. A plain *copy* of the file can only find the app if the folder is `~/CLIPPER` (or `Documents`, `Desktop` or `Downloads`, or named in `CLIPPER_HOME`); otherwise it says so and stops.
+
 Under the hood the app runs the same `clipper` commands, so it and the Terminal never disagree. It runs only on your computer (it listens on `127.0.0.1`, never the network), lets in only the browser tab the launcher opened, and needs nothing beyond what CLIPPER already uses. From a Terminal, `clipper gui` starts it too.
 
 ## Commands
